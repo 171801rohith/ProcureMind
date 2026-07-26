@@ -15,9 +15,10 @@ import java.util.UUID;
 public class ContractEventListener {
 
     private final PdfParsingService pdfParsingService;
+    private final IndexingService indexingService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @KafkaListener(topics = "contract.uploaded", groupId = "ai-processsing-group")
+    @KafkaListener(topics = "contract.uploaded", groupId = "ai-processing-group")
     public void handleContractUploaded(String eventJson) {
         try {
             JsonNode event = objectMapper.readTree(eventJson);
@@ -26,6 +27,9 @@ public class ContractEventListener {
 
             log.info("Received event for contract [{}]. Triggering PDF Parsing...", documentId);
             pdfParsingService.parseAndIndexPdf(documentId, minioObjName);
+
+            indexingService.indexContractNodes(documentId);
+            log.info("Done parsing event for contract [{}]. Triggering Indexing Agent...", documentId);
 
         } catch (Exception e) {
             log.error("Error processing contract uploaded event", e);

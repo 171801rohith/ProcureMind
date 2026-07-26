@@ -8,4 +8,6 @@ import java.util.List;
 
 public interface PageIndexNodeRepository extends JpaRepository<PageIndexNode, UUID> {
     List<PageIndexNode> findByDocumentIdOrderByNodeOrderAsc(UUID documentId);
+
+    List<PageIndexNode> findByDocumentIdAndSummaryIsNull(UUID documentId);
 }

@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.InputStream;
 import java.util.UUID;
@@ -30,6 +31,7 @@ public class PdfParsingService {
     private static final Pattern SECTION_PATTERN =
             Pattern.compile("^\\d+(\\.\\d+)+.*");
 
+    @Transactional
     public void parseAndIndexPdf(UUID documentId, String minioObjName) {
         try (InputStream stream = minioClient.getObject(
                 GetObjectArgs.builder()
@@ -95,7 +97,7 @@ public class PdfParsingService {
                     sectionContent,
                     order);
 
-            log.info("Finished indexing {}", documentId);
+            log.info("Finished initial indexing {}", documentId);
 
         } catch (Exception e) {
             log.error("Failed to parse PDF for contract {}", documentId, e);
