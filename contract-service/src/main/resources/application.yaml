@@ -29,9 +29,14 @@ spring:
   # Kafka Producer Configuration
   kafka:
     bootstrap-servers: localhost:9092
+    consumer:
+      group-id: contract-processing-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
   # Disable Flyway for Day 1 testing
   flyway:
