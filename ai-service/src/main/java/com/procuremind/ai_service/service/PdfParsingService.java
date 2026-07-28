@@ -62,7 +62,7 @@ public class PdfParsingService {
 
             for (String line : lines) {
                 String text = line.trim();
-                if (text.isBlank()) continue;
+                if (text.length() < 15) continue;
 
                 if (ARTICLE_PATTERN.matcher(text).matches()) {
 

@@ -4,7 +4,6 @@ import com.procuremind.ai_service.dto.PageIndexedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
@@ -13,10 +12,14 @@ import java.util.UUID;
 public class ContractEventProducer {
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
-    private static final String TOPIC_INDEXED = "contract.indexed";
 
     public void publishPageIndexed(UUID documentId) {
         PageIndexedEvent event = new PageIndexedEvent(documentId, "INDEXED");
-        kafkaTemplate.send(TOPIC_INDEXED, documentId.toString(), event);
+        kafkaTemplate.send("contract.indexed", documentId.toString(), event);
+    }
+
+    public void publishAnalysisCompleted(UUID documentId) {
+        PageIndexedEvent event = new PageIndexedEvent(documentId, "ANALYSIS_COMPLETED");
+        kafkaTemplate.send("contract.analyzed", documentId.toString(), event);
     }
 }

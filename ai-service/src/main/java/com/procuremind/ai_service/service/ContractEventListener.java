@@ -16,6 +16,7 @@ public class ContractEventListener {
 
     private final PdfParsingService pdfParsingService;
     private final IndexingService indexingService;
+    private final AnalysisService analysisService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @KafkaListener(topics = "contract.uploaded", groupId = "ai-processing-group")
@@ -33,6 +34,20 @@ public class ContractEventListener {
 
         } catch (Exception e) {
             log.error("Error processing contract uploaded event", e);
+        }
+    }
+
+    @KafkaListener(topics = "contract.indexed", groupId = "ai-processing-group")
+    public void handleContractIndexed(String eventJson) {
+        try {
+            JsonNode event = objectMapper.readTree(eventJson);
+            UUID contractId = UUID.fromString(event.get("contractId").asText());
+
+            log.info("Received event for indexed contract [{}]. Triggering contract Analysis...", contractId);
+            analysisService.processContract(contractId);
+
+        } catch (Exception e) {
+            log.error("Error processing contract indexed event", e);
         }
     }
 }

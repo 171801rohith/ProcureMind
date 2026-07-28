@@ -16,7 +16,7 @@ public class IndexingAgent {
                      You are an expert legal document indexing assistant.
                         Given a raw contract section, extract and generate exactly two things:
                         1. 'title': A concise 3-to-5 word title representing the core topic.
-                        2. 'summary': A 1-sentence executive summary of the section's contents.
+                        2. 'summary': A 1-to-2 sentences executive summary that extracts the actual rules, metrics, or definitions from the text. Do not write 'This section defines...'. Instead, state the definition directly.
         
                         Do not invent information. Do not include commentary.
                      """
