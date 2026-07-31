@@ -1,5 +1,6 @@
 package com.procuremind.ai_service.agent;
 
+import com.procuremind.ai_service.agent.tools.ContractAnalysisTools;
 import com.procuremind.ai_service.dto.ContractAnalysisResult;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
@@ -10,7 +11,7 @@ import java.util.UUID;
 public class AnalysisAgent {
     private final ChatClient chatClient;
 
-    public AnalysisAgent(ChatClient.Builder builder) {
+    public AnalysisAgent(ChatClient.Builder builder, ContractAnalysisTools contractAnalysisTools) {
         this.chatClient = builder
                 .defaultSystem("""
                         You are a Senior Enterprise Procurement Officer.
@@ -22,7 +23,7 @@ public class AnalysisAgent {
                             3. Call getVendorHistory.
                             4. Synthesize findings into the requested JSON format.
                         """)
-                .defaultTools("getContractSummary", "getClauseContent", "getVendorHistory")
+                .defaultTools(contractAnalysisTools)
                 .build();
     }
 

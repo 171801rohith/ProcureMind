@@ -5,6 +5,7 @@ import com.procuremind.ai_service.agent.AnalysisAgent;
 import com.procuremind.ai_service.dto.ContractAnalysisResult;
 import com.procuremind.ai_service.entity.AnalysisRisk;
 import com.procuremind.ai_service.entity.ContractAnalysis;
+import com.procuremind.ai_service.service.kafka.ContractEventProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

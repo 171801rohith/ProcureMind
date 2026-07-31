@@ -4,6 +4,7 @@ import com.procuremind.ai_service.Repository.PageIndexNodeRepository;
 import com.procuremind.ai_service.agent.IndexingAgent;
 import com.procuremind.ai_service.dto.NodeSummary;
 import com.procuremind.ai_service.entity.PageIndexNode;
+import com.procuremind.ai_service.service.kafka.ContractEventProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

@@ -5,14 +5,14 @@ import com.procuremind.ai_service.entity.PageIndexNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
-@Configuration
+@Component
 @RequiredArgsConstructor
 public class ContractAnalysisTools {
     private final PageIndexNodeRepository nodeRepository;

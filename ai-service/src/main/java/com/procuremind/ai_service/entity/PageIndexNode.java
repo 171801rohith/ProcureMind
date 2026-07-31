@@ -26,7 +26,10 @@ public class PageIndexNode {
     @Enumerated(EnumType.STRING)
     private NodeType nodeType;
 
+    @Column(columnDefinition = "TEXT")
     private String title;
+
+    @Column(columnDefinition = "TEXT")
     private String summary;
 
     @Column(columnDefinition = "TEXT")

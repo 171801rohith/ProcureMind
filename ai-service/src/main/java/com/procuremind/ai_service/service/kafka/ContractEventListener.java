@@ -1,7 +1,10 @@
-package com.procuremind.ai_service.service;
+package com.procuremind.ai_service.service.kafka;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.procuremind.ai_service.service.AnalysisService;
+import com.procuremind.ai_service.service.IndexingService;
+import com.procuremind.ai_service.service.PdfParsingService;
+import com.procuremind.common.dto.ContractUploadedEvent;
+import com.procuremind.common.dto.PageIndexedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -17,14 +20,12 @@ public class ContractEventListener {
     private final PdfParsingService pdfParsingService;
     private final IndexingService indexingService;
     private final AnalysisService analysisService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @KafkaListener(topics = "contract.uploaded", groupId = "ai-processing-group")
-    public void handleContractUploaded(String eventJson) {
+    public void handleContractUploaded(ContractUploadedEvent event) {
         try {
-            JsonNode event = objectMapper.readTree(eventJson);
-            UUID documentId = UUID.fromString(event.get("contractId").asText());
-            String minioObjName = event.get("minioObjName").asText();
+            UUID documentId = event.contractId();
+            String minioObjName = event.minioObjName();
 
             log.info("Received event for contract [{}]. Triggering PDF Parsing...", documentId);
             pdfParsingService.parseAndIndexPdf(documentId, minioObjName);
@@ -38,10 +39,9 @@ public class ContractEventListener {
     }
 
     @KafkaListener(topics = "contract.indexed", groupId = "ai-processing-group")
-    public void handleContractIndexed(String eventJson) {
+    public void handleContractIndexed(PageIndexedEvent event) {
         try {
-            JsonNode event = objectMapper.readTree(eventJson);
-            UUID contractId = UUID.fromString(event.get("contractId").asText());
+            UUID contractId = event.contractId();
 
             log.info("Received event for indexed contract [{}]. Triggering contract Analysis...", contractId);
             analysisService.processContract(contractId);

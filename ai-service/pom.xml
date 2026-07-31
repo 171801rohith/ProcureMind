@@ -125,6 +125,12 @@
 			<artifactId>tika-parsers-standard-package</artifactId>
 			<version>3.2.2</version>
 		</dependency>
+
+		<dependency>
+			<groupId>com.procuremind</groupId>
+			<artifactId>procuremind-common</artifactId>
+			<version>1.0-SNAPSHOT</version>
+		</dependency>
 	</dependencies>
 
 	<build>

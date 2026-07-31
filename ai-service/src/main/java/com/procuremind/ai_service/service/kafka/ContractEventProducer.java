@@ -1,6 +1,6 @@
-package com.procuremind.ai_service.service;
+package com.procuremind.ai_service.service.kafka;
 
-import com.procuremind.ai_service.dto.PageIndexedEvent;
+import com.procuremind.common.dto.PageIndexedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
