@@ -13,7 +13,7 @@ spring:
 
   # Database Configuration
   datasource:
-    url: jdbc:postgresql://localhost:5433/procuremind
+    url: jdbc:postgresql://localhost:5433/procuremind_db
     username: user
     password: password
     driver-class-name: org.postgresql.Driver
@@ -33,11 +33,12 @@ spring:
       group-id: contract-processing-group
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-
+    properties:
+      spring.json.trusted.packages: "com.procuremind.*"
   # Disable Flyway for Day 1 testing
   flyway:
     enabled: true

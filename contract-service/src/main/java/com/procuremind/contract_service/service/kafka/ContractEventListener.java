@@ -1,13 +1,12 @@
-package com.procuremind.contract_service.service;
+package com.procuremind.contract_service.service.kafka;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.procuremind.common.dto.PageIndexedEvent;
 import com.procuremind.contract_service.repository.ContractRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.fasterxml.jackson.databind.JsonNode;
 
 
 import java.util.UUID;
@@ -17,24 +16,22 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ContractEventListener {
     private final ContractRepository contractRepository;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Transactional
     @KafkaListener(topics = "contract.indexed", groupId = "contract-processing-group")
-    public void handleContractIndexed(String eventJson) {
-        updateContractStatus(eventJson, "INDEXED");
+    public void handleContractIndexed(PageIndexedEvent event) {
+        updateContractStatus(event, "INDEXED");
     }
 
     @Transactional
     @KafkaListener(topics = "contract.analyzed", groupId = "contract-processing-group")
-    public void handleContractAnalyzed(String eventJson) {
-        updateContractStatus(eventJson, "ANALYZED");
+    public void handleContractAnalyzed(PageIndexedEvent event) {
+        updateContractStatus(event, "ANALYZED");
     }
 
-    private void updateContractStatus(String eventJson, String newStatus) {
+    private void updateContractStatus(PageIndexedEvent event, String newStatus) {
         try {
-            JsonNode event = objectMapper.readTree(eventJson);
-            UUID docId = UUID.fromString(event.get("contractId").asText());
+            UUID docId = event.contractId();
 
             contractRepository.findById(docId).ifPresent(contract -> {
                 contract.setStatus(newStatus);
@@ -43,7 +40,7 @@ public class ContractEventListener {
             });
 
         } catch (Exception e) {
-            log.error("Failed to update contract status from event: {}", eventJson, e);
+            log.error("Failed to update contract status from event: {}", event, e);
         }
     }
 }
