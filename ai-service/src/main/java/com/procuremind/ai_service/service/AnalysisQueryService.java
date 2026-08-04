@@ -1,9 +1,11 @@
 package com.procuremind.ai_service.service;
 
+import com.procuremind.ai_service.Repository.AnalysisRiskRepository;
 import com.procuremind.ai_service.Repository.ContractAnalysisRepository;
 import com.procuremind.ai_service.Repository.PageIndexNodeRepository;
 import com.procuremind.ai_service.dto.AnalysisResponseDto;
 import com.procuremind.ai_service.dto.ClauseContentDto;
+import com.procuremind.ai_service.dto.DashboardMetricsDto;
 import com.procuremind.ai_service.dto.TocNodeDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +21,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AnalysisQueryService {
     private final ContractAnalysisRepository analysisRepository;
+    private final AnalysisRiskRepository riskRepository;
     private final PageIndexNodeRepository nodeRepository;
 
     @Transactional(readOnly = true)
@@ -27,7 +30,6 @@ public class AnalysisQueryService {
         return analysisRepository.findByContractId(contractId)
                 .map(analysis -> AnalysisResponseDto.builder()
                         .contractId(analysis.getContractId())
-                        .vendorName(analysis.getVendorName())
                         .riskScore(analysis.getRiskScore())
                         .recommendation(analysis.getRecommendation())
                         .status(analysis.getStatus())
@@ -74,4 +76,37 @@ public class AnalysisQueryService {
                 );
     }
 
+    @Transactional(readOnly = true)
+    public DashboardMetricsDto getDashboardMetrics() {
+        log.info("Fetching dashboard aggregated metrics");
+
+        long total = analysisRepository.count();
+        long highRisk = analysisRepository.countHighRiskContracts();
+        double avgRisk = analysisRepository.getAverageRiskScore();
+
+        return DashboardMetricsDto.builder()
+                .totalAnalyzed(total)
+                .highRiskCount(highRisk)
+                .averageRiskScore(Math.round(avgRisk * 10.0) / 10.0)
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AnalysisRiskRepository.RiskFrequency> getTopRiskyClauses() {
+        log.info("Fetching top risky clauses");
+        return riskRepository.findTopRisks().stream().limit(5).toList();
+    }
+
+    public List<AnalysisResponseDto> compareContracts(List<UUID> contractIds) {
+        log.info("Comparing contracts: {}", contractIds);
+        return analysisRepository.findByContractIdIn(contractIds).stream()
+                .map(analysis -> new AnalysisResponseDto(
+                        analysis.getContractId(),
+                        analysis.getRiskScore(),
+                        analysis.getRecommendation(),
+                        analysis.getStatus(),
+                        List.of(),
+                        analysis.getCreatedAt()
+                )).toList();
+    }
 }

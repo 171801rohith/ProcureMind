@@ -22,7 +22,6 @@ public class ContractAnalysis {
     @Column(unique = true, nullable = false)
     private UUID contractId;
 
-    private String vendorName;
     private Double riskScore;
     private String recommendation;
     private String status;

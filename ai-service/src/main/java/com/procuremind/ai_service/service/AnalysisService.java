@@ -1,10 +1,12 @@
 package com.procuremind.ai_service.service;
 
 import com.procuremind.ai_service.Repository.ContractAnalysisRepository;
+import com.procuremind.ai_service.Repository.ContractMetadataRepository;
 import com.procuremind.ai_service.agent.AnalysisAgent;
-import com.procuremind.ai_service.dto.ContractAnalysisResult;
+import com.procuremind.ai_service.dto.ContractAnalysisResultDto;
 import com.procuremind.ai_service.entity.AnalysisRisk;
 import com.procuremind.ai_service.entity.ContractAnalysis;
+import com.procuremind.ai_service.entity.ContractMetadata;
 import com.procuremind.ai_service.service.kafka.ContractEventProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +23,7 @@ import java.util.UUID;
 public class AnalysisService {
 
     private final ContractAnalysisRepository analysisRepository;
+    private final ContractMetadataRepository metadataRepository;
     private final ContractEventProducer eventProducer;
     private final AnalysisAgent analysisAgent;
 
@@ -33,16 +36,23 @@ public class AnalysisService {
             return;
         }
 
-        ContractAnalysisResult aiResponse = analysisAgent.execute(contractId);
+        ContractAnalysisResultDto aiResponse = analysisAgent.execute(contractId);
 
         ContractAnalysis analysis = ContractAnalysis.builder()
                 .contractId(contractId)
-                .vendorName(aiResponse.vendorName())
                 .riskScore(aiResponse.riskScore())
                 .recommendation(aiResponse.recommendation())
                 .status("COMPLETED")
                 .createdAt(LocalDateTime.now())
                 .build();
+
+        ContractMetadata metadata = ContractMetadata.builder()
+                .contractId(contractId)
+                .contractType(aiResponse.contractType())
+                .amount(aiResponse.amount())
+                .build();
+
+        metadataRepository.save(metadata);
 
         List<AnalysisRisk> risks = aiResponse.risks().stream()
                 .map(dto ->

@@ -9,7 +9,6 @@ import java.util.UUID;
 @Builder
 public record AnalysisResponseDto(
         UUID contractId,
-        String vendorName,
         Double riskScore,
         String recommendation,
         String status,

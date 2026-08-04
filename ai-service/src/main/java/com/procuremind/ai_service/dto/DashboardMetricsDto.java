@@ -1,4 +1,11 @@
 package com.procuremind.ai_service.dto;
 
-public record DashboardMetricsDto() {
+import lombok.Builder;
+
+@Builder
+public record DashboardMetricsDto(
+        long totalAnalyzed,
+        long highRiskCount,
+        Double averageRiskScore
+) {
 }

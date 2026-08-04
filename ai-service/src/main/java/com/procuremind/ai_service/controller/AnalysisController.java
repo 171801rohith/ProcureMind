@@ -2,14 +2,12 @@ package com.procuremind.ai_service.controller;
 
 import com.procuremind.ai_service.dto.AnalysisResponseDto;
 import com.procuremind.ai_service.dto.ClauseContentDto;
+import com.procuremind.ai_service.dto.DashboardMetricsDto;
 import com.procuremind.ai_service.dto.TocNodeDto;
 import com.procuremind.ai_service.service.AnalysisQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
@@ -49,5 +47,20 @@ public class AnalysisController {
         return queryService.getClauseContent(nodeId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/dashboard-metrics")
+    public ResponseEntity<DashboardMetricsDto> getMetrics() {
+        return ResponseEntity.ok(queryService.getDashboardMetrics());
+    }
+
+    @GetMapping("/risks/top")
+    public ResponseEntity<?> getTopRisks() {
+        return ResponseEntity.ok(queryService.getTopRiskyClauses());
+    }
+
+    @GetMapping("/compare")
+    public ResponseEntity<List<AnalysisResponseDto>> compareContracts(@RequestParam List<UUID> ids) {
+        return ResponseEntity.ok(queryService.compareContracts(ids));
     }
 }

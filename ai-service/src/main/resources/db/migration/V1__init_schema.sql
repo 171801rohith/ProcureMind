@@ -36,7 +36,6 @@ CREATE TABLE contract_analysis
 (
     id             UUID NOT NULL,
     contract_id    UUID NOT NULL,
-    vendor_name    VARCHAR(255),
     risk_score     DOUBLE PRECISION,
     recommendation VARCHAR(255),
     status         VARCHAR(255),

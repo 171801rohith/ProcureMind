@@ -1,7 +1,7 @@
 package com.procuremind.ai_service.agent;
 
 import com.procuremind.ai_service.agent.tools.ContractAnalysisTools;
-import com.procuremind.ai_service.dto.ContractAnalysisResult;
+import com.procuremind.ai_service.dto.ContractAnalysisResultDto;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
@@ -27,10 +27,10 @@ public class AnalysisAgent {
                 .build();
     }
 
-    public ContractAnalysisResult execute(UUID contractId) {
+    public ContractAnalysisResultDto execute(UUID contractId) {
         return chatClient.prompt()
                 .user("Analyze contract ID: " + contractId)
                 .call()
-                .entity(ContractAnalysisResult.class);
+                .entity(ContractAnalysisResultDto.class);
     }
 }
