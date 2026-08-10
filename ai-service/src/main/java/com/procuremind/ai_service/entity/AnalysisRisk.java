@@ -23,5 +23,7 @@ public class AnalysisRisk {
     private ContractAnalysis analysis;
 
     private String severity;
+
+    @Column(columnDefinition = "TEXT")
     private String description;
 }

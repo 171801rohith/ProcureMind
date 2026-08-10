@@ -1,6 +1,9 @@
 version: '3.8'
 
 services:
+  # ---------------------------------------------------------------------------
+  # INFRASTRUCTURE SERVICES
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:15-alpine
     container_name: procuremind-postgres
@@ -10,6 +13,11 @@ services:
       POSTGRES_DB: procuremind_db
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d procuremind_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio
@@ -21,6 +29,11 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   kafka:
     image: confluentinc/cp-kafka:7.4.4
@@ -40,6 +53,11 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 29092 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   ollama:
     image: ollama/ollama:latest
@@ -63,14 +81,74 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: procuremind-kafka-ui
     ports:
-      - "8085:8080" 
+      - "8085:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: procuremind-cluster
-      # Connects to the internal Docker network port for Kafka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       DYNAMIC_CONFIG_ENABLED: 'true'
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # PROCUREMIND MICROSERVICES
+  # ---------------------------------------------------------------------------
+  contract-service:
+    build:
+      context: .
+      dockerfile: contract-service/Dockerfile
+    container_name: procuremind-contract-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/procuremind_db
+      SPRING_DATASOURCE_USERNAME: user
+      SPRING_DATASOURCE_PASSWORD: password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: ai-service/Dockerfile
+    container_name: procuremind-ai-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/procuremind_db
+      SPRING_DATASOURCE_USERNAME: user
+      SPRING_DATASOURCE_PASSWORD: password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: procuremind-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      CONTRACT_SERVICE_URL: http://contract-service:8081
+      AI_SERVICE_URL: http://ai-service:8082
+    depends_on:
+      - contract-service
+      - ai-service
 
 volumes:
   ollama_data:

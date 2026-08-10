@@ -38,6 +38,10 @@ public class AnalysisService {
 
         ContractAnalysisResultDto aiResponse = analysisAgent.execute(contractId);
 
+        log.info("==========================================================");
+        log.info("AI Response : {}", aiResponse);
+        log.info("==========================================================");
+
         ContractAnalysis analysis = ContractAnalysis.builder()
                 .contractId(contractId)
                 .riskScore(aiResponse.riskScore())

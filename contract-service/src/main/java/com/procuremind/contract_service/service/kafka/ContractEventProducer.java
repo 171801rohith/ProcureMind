@@ -14,7 +14,7 @@ import java.util.UUID;
 public class ContractEventProducer {
     private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public void publishContractUploadEvent(UUID contractId, String vendorName, String filename, String minioObjName) {
+    public void publishContractUploadEvent(UUID contractId, String filename, String minioObjName) {
         try {
             ContractUploadedEvent event = new ContractUploadedEvent(contractId, filename, minioObjName);
             kafkaTemplate.send("contract.uploaded", contractId.toString(), event);

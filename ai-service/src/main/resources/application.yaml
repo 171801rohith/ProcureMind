@@ -41,7 +41,8 @@ spring:
       chat:
         options:
           model: qwen2.5:7b
-          temperature: 0.1
+          temperature: 0.0
+          num-ctx: 8192
 
 springdoc:
   api-docs:

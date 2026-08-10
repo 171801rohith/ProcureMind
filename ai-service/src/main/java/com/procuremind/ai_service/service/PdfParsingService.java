@@ -12,7 +12,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
@@ -21,15 +24,32 @@ import java.util.regex.Pattern;
 public class PdfParsingService {
     private final MinioClient minioClient;
     private final PageIndexNodeRepository nodeRepository;
-    private final Tika tika = new Tika();
+
+    private final Tika tika = createTika();
+
+    private static Tika createTika() {
+        Tika t = new Tika();
+        t.setMaxStringLength(-1);
+        return t;
+    }
 
     private static final String BUCKET_NAME = "procuremind-contracts";
 
-    private static final Pattern ARTICLE_PATTERN =
-            Pattern.compile("^Article\\s+[IVXLC]+.*", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ARTICLE_PATTERN = Pattern.compile(
+            "^ARTICLE\\s+([IVXLCDM]+|\\d+)\\.?\\s*[-–—:]?\\s*(.*)$",
+            Pattern.CASE_INSENSITIVE
+    );
 
-    private static final Pattern SECTION_PATTERN =
-            Pattern.compile("^\\d+(\\.\\d+)+.*");
+    private static final Pattern SECTION_PATTERN = Pattern.compile(
+            "^(\\d+(?:\\.\\d+)+)\\.?\\s*[-–—:]?\\s*(.*)$"
+    );
+
+    private static final Pattern NOISE_PATTERN = Pattern.compile(
+            "^(page\\s+\\d+(\\s+of\\s+\\d+)?|\\d+)$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    private static final int MAX_HEADER_LINE_LENGTH = 150;
 
     @Transactional
     public void parseAndIndexPdf(UUID documentId, String minioObjName) {
@@ -39,10 +59,10 @@ public class PdfParsingService {
                         .object(minioObjName)
                         .build()
         )) {
-
             String fullText = tika.parseToString(stream);
-            int order = 1;
             log.info("Successfully extracted text from PDF. Length: {} chars", fullText.length());
+
+            int order = 1;
 
             PageIndexNode root = PageIndexNode.builder()
                     .documentId(documentId)
@@ -50,76 +70,116 @@ public class PdfParsingService {
                     .level(1)
                     .nodeOrder(order++)
                     .nodeType(NodeType.ROOT)
+                    .title("Document Root")
                     .rawContext("FULL DOCUMENT")
                     .build();
-
             root = nodeRepository.save(root);
 
-            String[] lines = fullText.split("\\R");
-            StringBuilder sectionContent = new StringBuilder();
+            Map<Integer, PageIndexNode> lastNodeAtLevel = new HashMap<>();
+
             PageIndexNode curArticle = null;
+            PageIndexNode currentNode = root;
+            StringBuilder bodyBuffer = new StringBuilder();
 
+            String[] lines = fullText.split("\\R");
 
-            for (String line : lines) {
-                String text = line.trim();
-                if (text.length() < 15) continue;
+            for (String rawLine : lines) {
+                String text = rawLine.trim();
+                if (text.isEmpty()) continue;
+                if (NOISE_PATTERN.matcher(text).matches()) continue;
 
-                if (ARTICLE_PATTERN.matcher(text).matches()) {
+                boolean headCandidate = text.length() <= MAX_HEADER_LINE_LENGTH;
 
-                    flushSection(documentId, root, curArticle, sectionContent, order++);
+                if (headCandidate) {
+                    Matcher articleMatcher = ARTICLE_PATTERN.matcher(text);
+                    if (articleMatcher.matches()) {
+                        currentNode = finalizeNode(currentNode, bodyBuffer);
 
-                    sectionContent.setLength(0);
+                        String title = articleMatcher.group(2).isBlank()
+                                ? "ARTICLE" + articleMatcher.group(1)
+                                : articleMatcher.group(2).trim();
 
-                    curArticle = nodeRepository.save(
-                            PageIndexNode.builder()
-                                    .documentId(documentId)
-                                    .parentNodeId(root.getId())
-                                    .level(2)
-                                    .nodeOrder(order++)
-                                    .nodeType(NodeType.ARTICLE)
-                                    .rawContext(text)
-                                    .build()
-                    );
-                    continue;
+                        curArticle = PageIndexNode.builder()
+                                .documentId(documentId)
+                                .parentNodeId(root.getId())
+                                .level(2)
+                                .nodeOrder(order++)
+                                .nodeType(NodeType.ARTICLE)
+                                .title(title)
+                                .rawContext(text)
+                                .build();
+                        curArticle = nodeRepository.save(curArticle);
+
+                        lastNodeAtLevel.put(2, curArticle);
+                        clearDeeperLevels(lastNodeAtLevel, 2);
+                        currentNode = curArticle;
+                        continue;
+                    }
+                    Matcher sectionMatcher = SECTION_PATTERN.matcher(text);
+                    if (sectionMatcher.matches() && startsLikeTitle(sectionMatcher.group(2))) {
+                        currentNode = finalizeNode(currentNode, bodyBuffer);
+
+                        String numbering = sectionMatcher.group(1);
+                        int depth = numbering.split("\\.").length;
+                        int level = depth + 1;
+
+                        PageIndexNode parent = lastNodeAtLevel.getOrDefault(
+                                level - 1,
+                                curArticle != null ? curArticle : root
+                        );
+
+                        String title = sectionMatcher.group(2).isBlank()
+                                ? numbering
+                                : sectionMatcher.group(2).trim();
+
+                        PageIndexNode section = PageIndexNode.builder()
+                                .documentId(documentId)
+                                .parentNodeId(parent.getId())
+                                .level(level)
+                                .nodeOrder(order++)
+                                .nodeType(NodeType.SECTION)
+                                .title(title)
+                                .rawContext(text)
+                                .build();
+                        section = nodeRepository.save(section);
+
+                        lastNodeAtLevel.put(level, section);
+                        clearDeeperLevels(lastNodeAtLevel, level);
+                        currentNode = section;
+                        continue;
+                    }
                 }
-
-                if (SECTION_PATTERN.matcher(text).matches()) {
-                    flushSection(documentId, root, curArticle, sectionContent, order++);
-
-                    sectionContent.setLength(0);
-                }
-                sectionContent.append(text).append("\n");
+                bodyBuffer.append(text).append("\n");
             }
-
-            flushSection(documentId,
-                    root,
-                    curArticle,
-                    sectionContent,
-                    order);
-
+            finalizeNode(currentNode, bodyBuffer);
             log.info("Finished initial indexing {}", documentId);
-
         } catch (Exception e) {
             log.error("Failed to parse PDF for contract {}", documentId, e);
             throw new RuntimeException("PDF Parsing failed", e);
         }
     }
 
-    private void flushSection(UUID documentId, PageIndexNode root, PageIndexNode article, StringBuilder builder, int order) {
-        String text = builder.toString().trim();
-        if (text.isEmpty()) return;
+    private PageIndexNode finalizeNode(PageIndexNode node, StringBuilder bodyBuffer) {
+        if (!bodyBuffer.isEmpty()) {
+            String body = bodyBuffer.toString().trim();
+            String existing = node.getRawContext();
 
-        nodeRepository.save(
-                PageIndexNode.builder()
-                        .documentId(documentId)
-                        .parentNodeId(
-                                article == null ? root.getId() : article.getId()
-                        )
-                        .level(article == null ? 2 : 3)
-                        .nodeOrder(order)
-                        .nodeType(NodeType.SECTION)
-                        .rawContext(text)
-                        .build()
-        );
+            String combined = (existing == null || existing.isBlank())
+                    ? body
+                    : existing + "\n" + body;
+            node.setRawContext(combined);
+            node = nodeRepository.save(node);
+            bodyBuffer.setLength(0);
+        }
+        return node;
+    }
+
+    private void clearDeeperLevels(Map<Integer, PageIndexNode> lastNodeAtLevel, int level) {
+        lastNodeAtLevel.keySet().removeIf(l -> l > level);
+    }
+
+    private boolean startsLikeTitle(String remainder) {
+        if (remainder == null || remainder.isBlank()) return true;
+        return Character.isUpperCase(remainder.trim().charAt(0));
     }
 }
