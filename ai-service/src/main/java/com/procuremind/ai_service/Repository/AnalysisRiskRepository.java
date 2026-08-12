@@ -13,13 +13,24 @@ public interface AnalysisRiskRepository extends JpaRepository<AnalysisRisk, UUID
 
     interface RiskFrequency {
         String getDescription();
+
         Long getFrequency();
     }
 
-    @Query("SELECT r.description AS description, COUNT(r) AS frequency " +
-            "FROM AnalysisRisk r " +
-            "GROUP BY r.description " +
-            "ORDER BY frequency DESC "
-    )
+    interface RiskDistributionProjection {
+        String getSeverity();
+
+        Long getCount();
+    }
+
+    @Query("""
+                    SELECT r.description AS description, COUNT(r) AS frequency
+                    FROM AnalysisRisk r
+                    GROUP BY r.description
+                    ORDER BY frequency DESC
+            """)
     List<RiskFrequency> findTopRisks();
+
+    @Query("SELECT r.severity AS severity, COUNT(r) AS count FROM AnalysisRisk r GROUP BY r.severity")
+    List<RiskDistributionProjection> getRiskSeverityDistribution();
 }

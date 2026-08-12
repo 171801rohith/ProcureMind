@@ -1,110 +1,143 @@
-# ProcureMind — Dashboard UI (`procuremind-ui`)
+# ProcureMind — Executive Dashboard UI (`procuremind-ui`)
 
-**ProcureMind UI** is an interactive web-based dashboard built with **Python 3.13**, **Streamlit**, **Pandas**, and **Plotly**. It serves as the primary user interface for corporate procurement officers, legal teams, and contract managers to monitor ingested contracts, view real-time risk scores, analyze clause distributions, and track processing pipelines.
+![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=for-the-badge&logo=python)
+![Framework](https://img.shields.io/badge/framework-Streamlit%201.40%2B-red?style=for-the-badge&logo=streamlit)
+![Architecture](https://img.shields.io/badge/architecture-BFF%20%2F%20CQRS-purple?style=for-the-badge)
+![License](https://img.shields.io/badge/license-Enterprise%20SaaS-emerald?style=for-the-badge)
+
+**ProcureMind UI** is an enterprise-grade SaaS web application built with **Python 3.13**, **Streamlit**, **Pandas**, **Plotly**, and **python-dotenv**. It serves as the primary user interface for corporate procurement officers, legal teams, and contract managers to monitor ingested agreements, analyze real-time financial risk exposure, explore contract section trees (TOC), and converse with a transparent AI agent.
 
 ---
 
-## Architectural Role
+## 🏗️ System Architecture & BFF Integration
 
-In the ProcureMind microservices topology, `procuremind-ui` operates as an external client application. It consumes aggregated read models exclusively through the **API Gateway** (`http://localhost:8080`), ensuring complete decoupling from backend service locations and database instances.
+In the ProcureMind microservices topology, `procuremind-ui` operates as a **Backend-For-Frontend (BFF)** client layer. It reads microservice configurations from environment variables (`.env`) and consumes RESTful read models from the **API Gateway**, **Contract Service**, and **AI Service**.
 
 ```mermaid
-flowchart LR
-    User([Procurement Officer])
-    
-    subgraph UI Layer
-        ST["ProcureMind Streamlit UI\n(main.py - Port 8501)"]
+flowchart TD
+    User([👤 Procurement / Legal Officer])
+
+    subgraph UI Layer ["procuremind-ui (Port 8501)"]
+        ST["Streamlit Reactive Engine\n(main.py)"]
+        Cache["@st.cache_data CQRS Merger"]
     end
 
-    subgraph Edge Layer
+    subgraph Edge Layer ["API Gateway / Edge Router"]
         GW["API Gateway\n(Port 8080)"]
     end
 
-    subgraph Backend Microservices
-        CS["Contract Service\n/api/contracts"]
-        AI["AI Service\n/api/analysis/{id}"]
+    subgraph Microservices Layer ["Backend Services"]
+        CS["Contract Service\n(Port 8081)\n/api/contracts"]
+        AI["AI Intelligence Service\n(Port 8082)\n/api/analysis/*"]
     end
 
-    User -->|Browser HTTP| ST
-    ST -->|GET /api/contracts| GW
-    ST -->|GET /api/analysis/{id}| GW
+    User -->|Browser Session| ST
+    ST <--> Cache
+    Cache -->|GET /api/contracts| GW
+    Cache -->|GET /api/analysis/{id}| GW
+    ST -->|POST /api/contracts/upload| CS
+    ST -->|POST /api/analysis/chat| AI
     GW --> CS
     GW --> AI
 ```
 
 ---
 
-## Features & Capabilities
+## ⚡ Core Modules & Features
 
-* **Key Performance Indicator (KPI) Cards**: Displays real-time counts for Total Contracts, Pending Reviews, High-Risk Contracts (Risk Score $\ge$ 7.0), and Average Risk Score across all analyzed vendor agreements.
-* **Risk Severity Distribution Chart**: Visualizes high, medium, and low severity risk breakdown using interactive Plotly pie charts.
-* **CQRS Read Model Aggregation**: Merges contract lifecycle status from `contract-service` with AI risk analysis outputs from `ai-service` seamlessly in memory.
-* **Performance Caching**: Employs `@st.cache_data(ttl=10)` to optimize API Gateway throughput and prevent request flooding while keeping UI state fresh.
-* **Responsive Sidebar Navigation**: Quick access to Dashboard, Contracts, Vendors, and Comparisons modules.
+### 1. 📊 Executive BI Dashboard (`/`)
+* **Executive KPI Cards**: Aggregates metrics (`/api/analysis/dashboard-metrics`): Total Ingested Contracts, High-Risk Contracts, Average Risk Score, and Total Portfolio Exposure.
+* **Financial Exposure Scatter Plot**: Interactive Plotly bubble chart plotting Contracts by Risk Score (1-10) vs Amount ($) using `/api/analysis/financial-exposure`.
+* **Risk Severity Donut Chart**: Severity breakdown (High = Red, Medium = Amber, Low = Emerald) using `/api/analysis/risks/distribution`.
+* **Master Contracts Data Grid**: Sortable table merging `/api/contracts` metadata with `/api/analysis/{contractId}` intelligence.
+
+### 2. 📤 Contract Ingestion Pipeline
+* **Drag-and-Drop Uploader**: Accepts `.pdf` agreements.
+* **Metadata Processing**: Inputs `vendorName` (Default: "Unknown Vendor"), Contract Type, and Contract Value ($).
+* **State Machine Polling**: POSTs `multipart/form-data` to `/api/contracts/upload` and polls `/api/contracts/{id}/status` through lifecycle state transitions (`UPLOADED` ➔ `INDEXED` ➔ `ANALYZED`).
+
+### 3. 🔍 Document Intelligence Deep Dive
+* **Hierarchical Structure (TOC)**: Collapsible section tree fetched from `/api/analysis/{contractId}/toc`.
+* **Legal Reading Pane**: Displays exact legal text and AI summaries from `/api/analysis/node/{nodeId}`.
+* **Identified Risks Panel**: Side panel listing flagged risks mapped from `/api/analysis/{contractId}/risks` with severity badges and AI mitigation suggestions.
+
+### 4. 🏢 Vendor Risk Portfolio
+* **Aggregated Exposure Matrix**: Groups contract commitments, average risk scores, and high risk counts by vendor entity.
+
+### 5. 🤖 Agentic Chat Assistant
+* **Session Management**: Automatically provisions a persistent UUID `conversationId` per user session.
+* **Conversational AI API**: POSTs to `/api/analysis/chat` with `{ userMessage, conversationId }`.
+* **Transparent Agent Trace**: Renders markdown responses and an expandable `agentTrace` accordion detailing internal reasoning steps (e.g. `["Executed getCachedAnalysis", "Scanned vector DB"]`).
 
 ---
 
-## Folder Structure & Core Files
+## 📡 API Endpoint Reference Matrix
+
+| Feature Module | Endpoint Path | HTTP Verb | Service Target | Description |
+| :--- | :--- | :---: | :--- | :--- |
+| **Contracts Master** | `/api/contracts` | `GET` | API Gateway (`:8080`) | Retrieves all ingested contract metadata records |
+| **Dashboard Metrics** | `/api/analysis/dashboard-metrics` | `GET` | AI Service (`:8082`) | Returns KPI counts (`totalAnalyzed`, `highRiskCount`, `averageRiskScore`) |
+| **Financial Exposure** | `/api/analysis/financial-exposure` | `GET` | AI Service (`:8082`) | Retrieves risk score vs financial commitment plot points |
+| **Risk Distribution** | `/api/analysis/risks/distribution` | `GET` | AI Service (`:8082`) | Severity distribution count breakdown |
+| **Single Analysis** | `/api/analysis/{contractId}` | `GET` | API Gateway (`:8080`) | Fetches AI risk score, summary, and recommendation |
+| **Contract TOC** | `/api/analysis/{contractId}/toc` | `GET` | AI Service (`:8082`) | Hierarchical Table of Contents tree nodes |
+| **Node Detail** | `/api/analysis/node/{nodeId}` | `GET` | AI Service (`:8082`) | Exact legal text, AI clause summary, and node risks |
+| **Identified Risks** | `/api/analysis/{contractId}/risks` | `GET` | AI Service (`:8082`) | Categorized risk flags for a specific contract |
+| **Contract Upload** | `/api/contracts/upload` | `POST` | Contract Service (`:8081`) | Ingests PDF file with vendor metadata (`multipart/form-data`) |
+| **Status Polling** | `/api/contracts/{id}/status` | `GET` | Contract Service (`:8081`) | Checks ingestion status (`UPLOADED`, `INDEXED`, `ANALYZED`) |
+| **Agentic Chat** | `/api/analysis/chat` | `POST` | AI Service (`:8082`) | Interactive assistant query returning answer and `agentTrace` |
+
+---
+
+## ⚙️ Environment Configuration (`.env`)
+
+The application loads configuration parameters using `python-dotenv`. Create a `.env` file in the project root:
+
+```env
+# ProcureMind Microservices Backend Endpoints
+GATEWAY_URL=http://localhost:8080
+CONTRACT_SERVICE_URL=http://localhost:8081
+AI_SERVICE_URL=http://localhost:8082
+```
+
+> **Note**: If backend services are unreachable, the UI seamlessly falls back to high-fidelity mock datasets, ensuring zero runtime UI errors during demonstration or offline testing.
+
+---
+
+## 📁 Repository Structure
 
 ```
 procuremind-ui/
-├── pyproject.toml     # Project metadata and dependency definitions
-├── uv.lock            # Lockfile for reproducible environment resolution
-├── README.md          # UI documentation
-└── main.py            # Streamlit application entry point & rendering logic
+├── .env                # Microservices gateway configuration
+├── pyproject.toml      # Project metadata & Python dependencies
+├── uv.lock             # Reproducible lockfile for uv package manager
+├── README.md           # Production documentation
+└── main.py             # Streamlit application entry point & UI rendering logic
 ```
 
-### Key Python Dependencies (`pyproject.toml`)
-* `streamlit>=1.60.0`: Reactive web UI framework.
-* `pandas>=3.0.5`: Data tabular manipulation and CQRS record merging.
-* `plotly>=6.9.0`: Interactive charts and risk breakdown visualizer.
-* `requests>=2.34.2`: Synchronous HTTP client calling API Gateway endpoints.
-
 ---
 
-## Application Code Overview (`main.py`)
-
-### Core Components
-
-1. **Configuration & Gateway Binding**:
-   ```python
-   GATEWAY_URL = "http://localhost:8080"
-   ```
-
-2. **Cached API Integration**:
-   * `fetch_contracts()`: Calls `GET http://localhost:8080/api/contracts` to retrieve uploaded contract metadata.
-   * `fetch_analysis(contract_id)`: Calls `GET http://localhost:8080/api/analysis/{contract_id}` to fetch AI risk scores, recommendations, and granular risks.
-
-3. **CQRS Data Merger (`load_dashboard_data`)**:
-   Joins results per contract into a unified Pandas `DataFrame` containing contract IDs, vendor names, processing statuses, upload dates, risk scores, and nested risk arrays.
-
-4. **Rendering Components**:
-   * `render_kpi_cards(df)`: Computes and renders metric widgets.
-   * `render_main_content(df)`: Displays styled contract data tables alongside Plotly risk distribution charts.
-
----
-
-## Setup & Local Execution Guide
+## 🚀 Setup & Execution Guide
 
 ### Prerequisites
-* **Python 3.13+** installed on your system.
-* **ProcureMind API Gateway** running on `http://localhost:8080`.
+* **Python 3.13+** installed.
+* **uv** (Recommended) or standard `pip`.
 
 ### Option A: Running with `uv` (Recommended)
 
-`uv` is an extremely fast Python package installer and virtual environment manager.
+`uv` provides extremely fast environment resolution and execution.
 
 ```bash
 cd procuremind-ui
 
-# Sync dependencies and create virtual environment
+# Install dependencies and sync environment
 uv sync
 
-# Run the Streamlit application
+# Launch ProcureMind Streamlit UI
 uv run streamlit run main.py
 ```
 
-### Option B: Running with Standard `pip` and `venv`
+### Option B: Running with standard `pip` & `venv`
 
 ```bash
 cd procuremind-ui
@@ -112,36 +145,37 @@ cd procuremind-ui
 # Create virtual environment
 python -m venv .venv
 
-# Activate virtual environment
-# On Windows (PowerShell):
+# Activate environment
+# PowerShell:
 .venv\Scripts\Activate.ps1
-# On Linux/macOS:
+# Linux / macOS:
 source .venv/bin/activate
 
 # Install dependencies
-pip install -r pyproject.toml
+pip install -e .
 
-# Run the Streamlit application
+# Run Streamlit
 streamlit run main.py
 ```
 
----
-
-## Accessing the Dashboard
-
-Once started, Streamlit will output local URLs:
-* **Local Web Interface**: `http://localhost:8501`
-* **Network Interface**: `http://<your-ip>:8501`
-
-Open your web browser and navigate to `http://localhost:8501`.
+### 🌐 Accessing the Dashboard
+Open your browser and navigate to:
+- **Local Application Interface**: `http://localhost:8501`
 
 ---
 
-## Environment & Customization
+## 🎨 Design Language & Color Palette
 
-To point the UI to a remote or containerized API Gateway, modify `GATEWAY_URL` in `main.py` or set an environment override:
+ProcureMind utilizes a modern **Enterprise Dark Mode** palette:
 
-```python
-import os
-GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8080")
-```
+* **Background Base**: Slate 950 (`#0b0f19`) & Slate 900 (`#0f172a`)
+* **Card Borders**: Dark Slate (`#334155`) with Indigo glow on hover (`#3b82f6`)
+* **High Risk Badge**: Crimson Red (`#ef4444`, `rgba(239, 68, 68, 0.15)`)
+* **Medium Risk Badge**: Amber Gold (`#f59e0b`, `rgba(245, 158, 11, 0.15)`)
+* **Low Risk Badge**: Emerald Green (`#10b981`, `rgba(16, 185, 129, 0.15)`)
+
+---
+
+## 🛡️ License & Operational Security
+
+Built for enterprise procurement and legal compliance environments. All incoming contract uploads undergo server-side validation and isolated vector embedding indexing.

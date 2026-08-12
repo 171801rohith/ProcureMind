@@ -1,0 +1,68 @@
+[
+  {
+    "id": "e0318c92-7515-4c32-87cd-736c1c12bcb8",
+    "analysis_id": "3f44b48d-b384-4986-946e-991738de1215",
+    "severity": "Moderate",
+    "description": "No violation of or failure to comply with the provisions of these Guidelines shall be deemed to alter, affect the validity of, modify the terms of, or impair any Procurement or Program Contract; nor shall any provision of these Guidelines or any violation of or failure to comply with such provisions be the basis for any claim against the Authority or any member, officer, or employee of the Authority."
+  },
+  {
+    "id": "d855ffe1-ef18-40dd-8335-86e025042df9",
+    "analysis_id": "cc706ee9-b8f5-45e1-a0cf-73e7cfbdf283",
+    "severity": "Moderate",
+    "description": "The contract does not explicitly state that violations do not affect the validity of the contract or modify its terms. This could lead to disputes over contract terms if there are non-compliance issues."
+  },
+  {
+    "id": "4f39fcec-f167-4758-a02c-26e968e71d60",
+    "analysis_id": "cc706ee9-b8f5-45e1-a0cf-73e7cfbdf283",
+    "severity": "Moderate",
+    "description": "There is a strict 15-day foreign notice requirement, and board approval is mandatory for contracts above $1M. Non-compliance with these requirements may result in delays or legal challenges."
+  },
+  {
+    "id": "77fa9f7e-ed48-493b-8ece-582b96af33f4",
+    "analysis_id": "e05b732a-56bd-4079-bb85-6bf284c978e9",
+    "severity": "Moderate",
+    "description": "The agreement includes a liquidated damages clause that could result in significant financial liability for non-payment, subject to certain conditions."
+  },
+  {
+    "id": "6c4672bd-4b04-47e1-a7bb-21a3061da4c2",
+    "analysis_id": "e05b732a-56bd-4079-bb85-6bf284c978e9",
+    "severity": "Moderate",
+    "description": "Early termination by the Exhibitor can lead to immediate payment obligations and potential financial exposure if not managed properly."
+  },
+  {
+    "id": "dbfe7618-77dc-4b24-a171-1f0a862337c7",
+    "analysis_id": "e05b732a-56bd-4079-bb85-6bf284c978e9",
+    "severity": "High",
+    "description": "The indemnification clause requires both parties to defend each other against claims, which could result in significant legal costs and liabilities."
+  },
+  {
+    "id": "47996fab-4749-4edd-b332-a5148e909d0e",
+    "analysis_id": "e05b732a-56bd-4079-bb85-6bf284c978e9",
+    "severity": "Moderate",
+    "description": "The limitation of liability clause restricts the financial exposure for breaches but excludes indirect damages, potentially leaving the company exposed to certain types of losses."
+  },
+  {
+    "id": "8973231d-facf-4768-98f7-1df423767843",
+    "analysis_id": "e05b732a-56bd-4079-bb85-6bf284c978e9",
+    "severity": "Low",
+    "description": "The disclaimer of warranty clause eliminates all implied warranties, including merchantability and fitness for a particular purpose, which could expose the company to potential claims if services do not meet expectations."
+  },
+  {
+    "id": "4b502e61-debf-4ba2-b51f-209c7b9cd5d7",
+    "analysis_id": "b691212c-10d7-45b8-9dbe-e643cf74217e",
+    "severity": "High",
+    "description": "The agreement includes a broad indemnification clause that could expose the client to significant costs if the consultant breaches its obligations, particularly regarding intellectual property infringement or negligence."
+  },
+  {
+    "id": "121baeb2-4b0c-4a24-9364-1692a6614ee7",
+    "analysis_id": "b691212c-10d7-45b8-9dbe-e643cf74217e",
+    "severity": "Moderate",
+    "description": "Limited liability is capped at amounts paid under specific Statements of Work, which may not fully protect against all potential losses, especially in cases of criminal misconduct or fraud."
+  },
+  {
+    "id": "ea2c14d3-aa61-4e13-8190-8aa521a35b50",
+    "analysis_id": "b691212c-10d7-45b8-9dbe-e643cf74217e",
+    "severity": "Low",
+    "description": "The agreement allows for termination by the client if there is a breach of confidentiality, which could be triggered by minor issues and result in the return of materials and payment for completed work."
+  }
+]

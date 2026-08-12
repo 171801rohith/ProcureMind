@@ -2,7 +2,7 @@ package com.procuremind.ai_service.controller;
 
 import com.procuremind.ai_service.dto.AnalysisResponseDto;
 import com.procuremind.ai_service.dto.ClauseContentDto;
-import com.procuremind.ai_service.dto.DashboardMetricsDto;
+import com.procuremind.ai_service.dto.DashboardDtos;
 import com.procuremind.ai_service.dto.TocNodeDto;
 import com.procuremind.ai_service.service.AnalysisQueryService;
 import lombok.RequiredArgsConstructor;
@@ -50,7 +50,7 @@ public class AnalysisController {
     }
 
     @GetMapping("/dashboard-metrics")
-    public ResponseEntity<DashboardMetricsDto> getMetrics() {
+    public ResponseEntity<DashboardDtos.DashboardMetricsDto> getMetrics() {
         return ResponseEntity.ok(queryService.getDashboardMetrics());
     }
 
@@ -62,5 +62,20 @@ public class AnalysisController {
     @GetMapping("/compare")
     public ResponseEntity<List<AnalysisResponseDto>> compareContracts(@RequestParam List<UUID> ids) {
         return ResponseEntity.ok(queryService.compareContracts(ids));
+    }
+
+    @GetMapping("/financial-exposure")
+    public ResponseEntity<List<DashboardDtos.FinancialExposureDto>> getFinancialExposure() {
+        return ResponseEntity.ok(queryService.getFinancialExposure());
+    }
+
+    @GetMapping("/risks/distribution")
+    public ResponseEntity<List<DashboardDtos.RiskDistributionDto>> getRiskDistribution() {
+        return ResponseEntity.ok(queryService.getRiskDistribution());
+    }
+
+    @GetMapping("/contracts/type-distribution")
+    public ResponseEntity<List<DashboardDtos.ContractTypeDistributionDto>> getContractTypeDistribution() {
+        return ResponseEntity.ok(queryService.getContractTypeDistribution());
     }
 }
