@@ -53,6 +53,11 @@ public class PdfParsingService {
 
     @Transactional
     public void parseAndIndexPdf(UUID documentId, String minioObjName) {
+        if (nodeRepository.existsByDocumentId(documentId)) {
+            log.info("Document [{}] already has parsed index nodes. Skipping duplicate parsing.", documentId);
+            return;
+        }
+
         try (InputStream stream = minioClient.getObject(
                 GetObjectArgs.builder()
                         .bucket(BUCKET_NAME)

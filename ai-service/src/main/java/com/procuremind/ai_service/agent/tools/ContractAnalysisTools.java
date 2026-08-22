@@ -22,8 +22,8 @@ public class ContractAnalysisTools {
         return retrievalService.getClauseContent(nodeId);
     }
 
-    @Tool(description = "Fetches historical risk metrics for a vendor.")
-    public String getVendorHistory(String vendorName) {
-        return retrievalService.getVendorHistory(vendorName);
-    }
+//    @Tool(description = "Fetches historical risk metrics for a vendor.")
+//    public String getVendorHistory(String vendorName) {
+//        return retrievalService.getVendorHistory(vendorName);
+//    }
 }

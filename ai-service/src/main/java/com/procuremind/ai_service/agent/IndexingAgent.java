@@ -17,7 +17,7 @@ public class IndexingAgent {
                         1. 'title': A concise 3-to-5 word title representing the core topic.
                         2. 'summary': A 1-to-2 sentences executive summary that extracts the actual rules, metrics, or definitions from the text. Do not write 'This section defines...'. Instead, state the definition directly.
         
-                        Do not invent information. Do not include commentary.
+                        Do not invent information. Do not include commentary. Output valid JSON with 'title' and 'summary' fields.
                      """
         ).build();
     }

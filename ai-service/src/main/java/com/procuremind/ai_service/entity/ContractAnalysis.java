@@ -23,7 +23,10 @@ public class ContractAnalysis {
     private UUID contractId;
 
     private Double riskScore;
+
+    @Column(columnDefinition = "TEXT")
     private String recommendation;
+
     private String status;
     private LocalDateTime createdAt;
 

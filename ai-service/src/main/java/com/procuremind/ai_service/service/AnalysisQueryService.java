@@ -84,12 +84,13 @@ public class AnalysisQueryService {
 
         long total = analysisRepository.count();
         long highRisk = analysisRepository.countHighRiskContracts();
-        double avgRisk = analysisRepository.getAverageRiskScore();
+        Double avgRisk = analysisRepository.getAverageRiskScore();
+        double avg = (avgRisk != null) ? avgRisk : 0.0;
 
         return DashboardDtos.DashboardMetricsDto.builder()
                 .totalAnalyzed(total)
                 .highRiskCount(highRisk)
-                .averageRiskScore(Math.round(avgRisk * 10.0) / 10.0)
+                .averageRiskScore(Math.round(avg * 10.0) / 10.0)
                 .build();
     }
 

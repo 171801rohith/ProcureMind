@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: api-gateway
+  servlet:
+    multipart:
+      max-file-size: 70MB
+      max-request-size: 70MB
   cloud:
     gateway:
       server:

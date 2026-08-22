@@ -13,8 +13,7 @@ from dotenv import load_dotenv
 # --- 1. ENVIRONMENT CONFIGURATION & SETUP ---
 load_dotenv()
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8080")
-# Extended timeout so the frontend waits for long-running LLM and backend microservices
-API_TIMEOUT = int(os.getenv("API_TIMEOUT", "120"))
+API_TIMEOUT = int(os.getenv("API_TIMEOUT", "12000"))
 
 st.set_page_config(
     page_title="ProcureMind - AI Contract Intelligence",
@@ -28,14 +27,14 @@ CUSTOM_CSS = """
 <style>
     /* Dark Slate Body & Backgrounds */
     .stApp {
-        background-color: #0b0f19;
+        background-color: #080c14;
         color: #f1f5f9;
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
     }
     
     /* Header Styling */
     header[data-testid="stHeader"] {
-        background-color: #0b0f19;
+        background-color: #080c14;
     }
     
     /* Sidebar Styling */
@@ -43,8 +42,19 @@ CUSTOM_CSS = """
         background-color: #0f172a;
         border-right: 1px solid #1e293b;
     }
+
+    /* Executive Glass Card Styles */
+    .glass-card {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.8) 100%);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(8px);
+        transition: transform 0.2s, border-color 0.2s;
+    }
     
-    /* Executive Metric Card Styles */
+    /* Metric Card Styles */
     .metric-card {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         border: 1px solid #334155;
@@ -59,14 +69,14 @@ CUSTOM_CSS = """
     }
     .metric-title {
         color: #94a3b8;
-        font-size: 0.85rem;
+        font-size: 0.82rem;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
     .metric-value {
         color: #f8fafc;
-        font-size: 1.8rem;
+        font-size: 1.85rem;
         font-weight: 700;
         margin-top: 6px;
     }
@@ -105,35 +115,43 @@ CUSTOM_CSS = """
         font-size: 0.78rem;
     }
 
-    /* Custom Chat Message Bubbles */
-    .chat-user {
+    /* Standalone Chat UI Components */
+    .chat-container-header {
+        background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+        border: 1px solid #1e3a8a;
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-bottom: 16px;
+    }
+    .chat-user-bubble {
         background-color: #1e293b;
         border: 1px solid #334155;
         border-radius: 12px 12px 2px 12px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
+        padding: 14px 18px;
+        margin-bottom: 14px;
         color: #f1f5f9;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     }
-    .chat-agent {
+    .chat-agent-bubble {
         background-color: #0f172a;
         border: 1px solid #1e3a8a;
         border-radius: 12px 12px 12px 2px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
+        padding: 14px 18px;
+        margin-bottom: 14px;
         color: #e2e8f0;
-        box-shadow: 0 0 15px -3px rgba(59, 130, 246, 0.15);
+        box-shadow: 0 0 20px -4px rgba(59, 130, 246, 0.2);
     }
     
     /* Trace Expander Container */
     .trace-box {
-        background-color: #070b14;
+        background-color: #050811;
         border-left: 3px solid #3b82f6;
-        padding: 10px 14px;
+        padding: 12px 16px;
         font-family: 'Fira Code', monospace;
         font-size: 0.82rem;
         color: #93c5fd;
-        border-radius: 4px;
-        margin-top: 8px;
+        border-radius: 6px;
+        margin-top: 10px;
     }
 </style>
 """
@@ -147,7 +165,7 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = [
         {
             "sender": "agent",
-            "text": "I am ProcureMind AI. Ask me about your contract portfolio, risk exposure, or specific vendor terms.",
+            "text": "I am **ProcureMind AI**. Ask me about your contract portfolio, risk exposure, specific vendor terms, or clause remediation options.",
             "timestamp": datetime.now().strftime("%H:%M"),
             "agentTrace": ["Initialized ProcureMind Agentic Assistant session", "Bound session UUID"]
         }
@@ -204,7 +222,10 @@ def fetch_contract_risks_api(contract_id: str):
 
 def upload_contract_api(file, vendor_name: str, contract_type: str, amount: float):
     url = f"{GATEWAY_URL}/api/contracts/upload"
-    files = {"file": (file.name, file, "application/pdf")}
+    # Ensure file buffer is at position 0
+    if hasattr(file, "seek"):
+        file.seek(0)
+    files = {"file": (file.name, file.getvalue() if hasattr(file, "getvalue") else file, "application/pdf")}
     data = {
         "vendorName": vendor_name,
         "contractType": contract_type,
@@ -212,8 +233,13 @@ def upload_contract_api(file, vendor_name: str, contract_type: str, amount: floa
     }
     try:
         res = requests.post(url, files=files, data=data, timeout=API_TIMEOUT)
-        if res.status_code in [200, 201]:
-            return res.json()
+        if res.status_code in [200, 201, 202]:
+            try:
+                return res.json()
+            except Exception:
+                return {"id": "UPLOADED", "status": "UPLOADED", "filename": file.name}
+        else:
+            st.error(f"Backend API Gateway returned HTTP {res.status_code}: {res.text}")
     except Exception as e:
         st.error(f"Failed to upload contract to {url}: {e}")
     return None
@@ -271,7 +297,7 @@ def load_merged_contracts():
 def render_header():
     col1, col2, col3 = st.columns([3, 2, 2])
     with col1:
-        st.markdown("<h2 style='margin:0; color:#f8fafc; font-weight:800;'>🛡️ ProcureMind <span style='font-size:0.9rem; color:#3b82f6; border:1px solid #1d4ed8; padding:2px 8px; border-radius:12px;'>BFF Enterprise</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='margin:0; color:#f8fafc; font-weight:800;'>🛡️ ProcureMind <span style='font-size:0.85rem; color:#3b82f6; border:1px solid #1d4ed8; padding:2px 8px; border-radius:12px;'>BFF Enterprise</span></h2>", unsafe_allow_html=True)
         st.caption("AI-Powered Legal Contract Analysis & Financial Risk Platform")
     
     with col2:
@@ -286,21 +312,24 @@ def render_sidebar():
         st.markdown("### 📌 Navigation")
         selected_tab = st.radio(
             "Select Module",
-            ["📊 BI Dashboard", "🔍 Document Intelligence", "🏢 Vendors Portfolio", "📤 Ingestion Pipeline"],
+            [
+                "📊 BI Dashboard",
+                "🔍 Document Intelligence",
+                "🏢 Vendors Portfolio",
+                "📤 Ingestion Pipeline",
+                "🤖 ProcureMind AI Assistant"
+            ],
             index=0
         )
         st.markdown("---")
         
-        st.markdown("#### ⚙️ Backend Connectivity")
-        st.markdown(f"🔗 **API Gateway:** `http://localhost:8080`")
-        st.markdown(f"⏳ **Request Timeout:** `{API_TIMEOUT}s`")
+        st.markdown("#### ⚙️ System Status")
+        st.markdown(f"🟢 **API Gateway:** `{GATEWAY_URL}`")
+        st.markdown(f"⏳ **Timeout:** `{API_TIMEOUT}s`")
         st.markdown("---")
+        st.caption(f"Session UUID:\n`{st.session_state.conversation_id}`")
         
-        st.markdown("#### 🤖 Agentic Assistant")
-        st.caption(f"Session UUID: `{st.session_state.conversation_id[:13]}...`")
-        show_chat = st.checkbox("Open Chat Drawer Panel", value=True)
-        
-        return selected_tab, show_chat
+        return selected_tab
 
 # --- 7. UPLOAD MODAL COMPONENT (FR-2) ---
 def render_upload_modal():
@@ -308,6 +337,23 @@ def render_upload_modal():
     st.subheader("📤 Ingest New Legal Contract")
     st.caption("Upload a `.pdf` agreement to trigger OCR text extraction, clause indexing, and AI risk scoring via backend API.")
     
+    if "last_uploaded_contract" in st.session_state and st.session_state.last_uploaded_contract:
+        last_c = st.session_state.last_uploaded_contract
+        st.success(f"🎉 **Contract Ingested Successfully!** Assigned UUID: `{last_c.get('id')}`")
+        st.markdown(f"""
+        <div style="background-color:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.3); border-radius:10px; padding:16px; margin-bottom:20px;">
+            <h5 style="color:#10b981; margin:0 0 8px 0;">✅ Pipeline Event Dispatched</h5>
+            <p style="margin:0; font-size:0.9rem; color:#cbd5e1;">
+                <b>File:</b> {last_c.get('filename')}<br>
+                <b>Vendor:</b> {last_c.get('vendorName')}<br>
+                <b>Status:</b> <span class="badge-low">{last_c.get('status', 'UPLOADED')}</span>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("➕ Ingest Another Contract"):
+            del st.session_state.last_uploaded_contract
+            st.rerun()
+
     with st.form("upload_form", clear_on_submit=True):
         uploaded_file = st.file_uploader("Drag and drop PDF contract file", type=["pdf"])
         col_a, col_b, col_c = st.columns(3)
@@ -326,17 +372,18 @@ def render_upload_modal():
             else:
                 with st.spinner("Uploading contract file to backend API Gateway (waiting for response)..."):
                     res = upload_contract_api(uploaded_file, vendor_input, type_input, amount_input)
-                    if res and ("id" in res or "contractId" in res):
-                        cid = res.get("id") or res.get("contractId")
-                        st.success(f"File uploaded successfully! Assigned ID: `{cid}`")
-                        
-                        progress_bar = st.progress(50, text="Checking ingestion status from API...")
-                        status_res = check_status_api(cid)
-                        progress_bar.progress(100, text=f"Status: {status_res.get('status', 'ANALYZED')}!")
+                    if res and ("id" in res or "contractId" in res or "filename" in res or "status" in res):
+                        cid = res.get("id") or res.get("contractId") or "NEW"
+                        st.session_state.last_uploaded_contract = {
+                            "id": cid,
+                            "filename": uploaded_file.name,
+                            "vendorName": vendor_input,
+                            "status": res.get("status", "UPLOADED")
+                        }
                         st.balloons()
                         st.rerun()
                     else:
-                        st.error("Upload failed or backend API returned an invalid response.")
+                        st.error("Upload failed: Backend API did not return a valid contract acknowledgment.")
 
 # --- 8. BI DASHBOARD COMPONENT (FR-1) ---
 def render_dashboard(df):
@@ -348,10 +395,10 @@ def render_dashboard(df):
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""
-        <div class="metric-card">
+        <div class="metric-card" style="border-top:3px solid #10b981;">
             <div class="metric-title">Total Ingested Contracts</div>
             <div class="metric-value">{metrics['totalAnalyzed']}</div>
-            <div class="metric-subtitle" style="color:#10b981;">From Backend API</div>
+            <div class="metric-subtitle" style="color:#10b981;">From API Gateway</div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -376,10 +423,10 @@ def render_dashboard(df):
     with c4:
         total_exp = sum(float(d.get("amount", 0)) for d in exposure_data) if exposure_data else 0
         st.markdown(f"""
-        <div class="metric-card">
+        <div class="metric-card" style="border-top:3px solid #3b82f6;">
             <div class="metric-title">Financial Risk Exposure</div>
             <div class="metric-value" style="color:#3b82f6;">${total_exp/1e6:.2f}M</div>
-            <div class="metric-subtitle" style="color:#94a3b8;">From Backend Exposure API</div>
+            <div class="metric-subtitle" style="color:#94a3b8;">Portfolio Commitment</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -392,7 +439,6 @@ def render_dashboard(df):
         st.markdown("#### 📈 Financial Exposure vs. Risk Score Scatter Plot")
         if exposure_data:
             exp_df = pd.DataFrame(exposure_data)
-            # Ensure expected numeric columns
             if "riskScore" in exp_df.columns and "amount" in exp_df.columns:
                 fig_scatter = px.scatter(
                     exp_df,
@@ -414,7 +460,7 @@ def render_dashboard(df):
                     xaxis=dict(gridcolor="#334155", range=[0, 10]),
                     yaxis=dict(gridcolor="#334155")
                 )
-                fig_scatter.add_vline(x=7.0, line_dash="dash", line_color="#ef4444", annotation_text="High Risk Cutoff")
+                fig_scatter.add_vline(x=7.0, line_dash="dash", line_color="#ef4444", annotation_text="High Risk Threshold")
                 st.plotly_chart(fig_scatter, use_container_width=True)
             else:
                 st.info("Exposure data format returned from backend is missing required fields.")
@@ -426,7 +472,11 @@ def render_dashboard(df):
         if distribution_data:
             dist_df = pd.DataFrame(distribution_data)
             if "severity" in dist_df.columns and "count" in dist_df.columns:
-                color_map = {"HIGH": "#ef4444", "MEDIUM": "#f59e0b", "LOW": "#10b981"}
+                color_map = {
+                    "HIGH": "#ef4444", "High": "#ef4444",
+                    "MODERATE": "#f59e0b", "Moderate": "#f59e0b", "MEDIUM": "#f59e0b", "Medium": "#f59e0b",
+                    "LOW": "#10b981", "Low": "#10b981"
+                }
                 fig_donut = px.pie(
                     dist_df,
                     values="count",
@@ -516,8 +566,15 @@ def render_document_intelligence(df):
         st.markdown("#### 🌲 Structure TOC")
         toc_nodes = fetch_contract_toc_api(selected_contract_id)
         
+        node_map = {}
         if toc_nodes:
-            node_titles = [f"{n.get('id', idx)}: {n.get('title', 'Section')}" for idx, n in enumerate(toc_nodes)]
+            node_titles = []
+            for idx, n in enumerate(toc_nodes):
+                nid = n.get("id") or str(idx)
+                title = n.get("title") or n.get("name") or f"Section {idx+1}"
+                node_map[nid] = n
+                node_titles.append(f"{nid}: {title}")
+                
             selected_node_str = st.radio("Inspect Clause Node:", node_titles)
             selected_node_id = selected_node_str.split(":")[0] if selected_node_str else ""
         else:
@@ -527,23 +584,42 @@ def render_document_intelligence(df):
     with col_pane:
         st.markdown("#### 📖 Legal Reading Pane")
         if selected_node_id:
+            selected_toc_node = node_map.get(selected_node_id, {})
             node_detail = fetch_node_detail_api(selected_node_id)
-            if node_detail:
-                st.markdown(f"""
-                <div style="background-color:#0f172a; border:1px solid #1e293b; padding:16px; border-radius:8px;">
-                    <h5 style="color:#3b82f6; margin-top:0;">{node_detail.get('title', 'Section Detail')}</h5>
-                    <p style="font-family:serif; font-size:0.95rem; color:#cbd5e1; line-height:1.6;">
-                    "{node_detail.get('text', 'No clause text returned.')}"
-                    </p>
-                    <hr style="border-color:#334155;">
-                    <h5 style="color:#10b981; margin-bottom:4px;">🤖 AI Clause Summary</h5>
-                    <p style="font-size:0.88rem; color:#94a3b8;">
-                    {node_detail.get('summary', 'No summary available.')}
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info(f"No detail returned from backend for node `{selected_node_id}`.")
+            
+            # Robust Multi-Field Extraction for Legal Text & Summary
+            clause_title = node_detail.get('title') or selected_toc_node.get('title') or 'Section Detail'
+            clause_text = (
+                node_detail.get('rawContent') or
+                node_detail.get('text') or
+                node_detail.get('content') or
+                node_detail.get('clauseText') or
+                node_detail.get('snippet') or
+                selected_toc_node.get('snippet') or
+                selected_toc_node.get('summary') or
+                "No clause text returned from backend API."
+            )
+            clause_summary = (
+                node_detail.get('summary') or
+                node_detail.get('aiSummary') or
+                selected_toc_node.get('summary') or
+                selected_toc_node.get('description') or
+                "No summary available."
+            )
+            
+            st.markdown(f"""
+            <div style="background-color:#0f172a; border:1px solid #1e293b; padding:16px; border-radius:8px;">
+                <h5 style="color:#3b82f6; margin-top:0;">{clause_title}</h5>
+                <p style="font-family:serif; font-size:0.95rem; color:#cbd5e1; line-height:1.6; white-space: pre-wrap;">
+                "{clause_text}"
+                </p>
+                <hr style="border-color:#334155;">
+                <h5 style="color:#10b981; margin-bottom:4px;">🤖 AI Clause Summary</h5>
+                <p style="font-size:0.88rem; color:#94a3b8;">
+                {clause_summary}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
         else:
             st.info("Select a node from the TOC tree to read legal text.")
 
@@ -552,14 +628,21 @@ def render_document_intelligence(df):
         risks_data = fetch_contract_risks_api(selected_contract_id)
         if risks_data:
             for r in risks_data:
-                sev = r.get("severity", "MEDIUM").upper()
-                badge_class = "badge-high" if sev == "HIGH" else "badge-medium" if sev == "MEDIUM" else "badge-low"
+                sev_raw = str(r.get("severity", "MEDIUM")).upper()
+                badge_class = "badge-high" if sev_raw in ["HIGH", "CRITICAL"] else "badge-medium" if sev_raw in ["MEDIUM", "MODERATE"] else "badge-low"
+                
+                cat = r.get("category") or r.get("riskCategory") or r.get("type") or r.get("title") or r.get("clause") or "Risk Category"
+                desc = r.get("description") or r.get("text") or r.get("details") or r.get("risk") or "No description provided."
+                action = r.get("recommendation") or r.get("action") or r.get("suggestedAction") or r.get("mitigation")
+                
+                action_html = f'<b style="font-size:0.78rem; color:#3b82f6;">💡 Action: {action}</b>' if action else ''
+                
                 st.markdown(f"""
                 <div style="background-color:rgba(15, 23, 42, 0.8); border:1px solid #334155; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <span class="{badge_class}">{sev} RISK</span>
-                    <h5 style="margin:6px 0; color:#f8fafc;">{r.get('category', 'Risk Category')}</h5>
-                    <p style="font-size:0.8rem; color:#94a3b8; margin-bottom:6px;">{r.get('description', 'No description.')}</p>
-                    <b style="font-size:0.78rem; color:#3b82f6;">💡 Action: {r.get('recommendation', 'N/A')}</b>
+                    <span class="{badge_class}">{sev_raw} RISK</span>
+                    <h5 style="margin:6px 0; color:#f8fafc;">{cat}</h5>
+                    <p style="font-size:0.8rem; color:#94a3b8; margin-bottom:6px;">{desc}</p>
+                    {action_html}
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -613,79 +696,116 @@ def render_vendors_portfolio(df):
         )
         st.plotly_chart(fig_vendor, use_container_width=True)
 
-# --- 11. AGENTIC CHAT ASSISTANT DRAWER (FR-4) ---
-def render_agentic_chat_drawer():
-    st.markdown("---")
-    st.subheader("🤖 ProcureMind Agentic Assistant")
-    st.caption(f"Session ID: `{st.session_state.conversation_id}`")
+# --- 11. STANDALONE AGENTIC CHAT ASSISTANT PAGE (FR-4) ---
+def render_agentic_chat_page():
+    st.markdown("### 🤖 ProcureMind Agentic Assistant Workspace")
+    
+    st.markdown(f"""
+    <div class="chat-container-header">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h4 style="margin:0; color:#f8fafc;">Conversational Contract Intelligence Agent</h4>
+                <p style="margin:4px 0 0 0; font-size:0.83rem; color:#94a3b8;">
+                    Connected to Backend Gateway <code>{GATEWAY_URL}</code> | Model: Agentic Vector RAG
+                </p>
+            </div>
+            <div style="text-align:right;">
+                <span class="badge-low">🟢 ACTIVE SESSION</span><br>
+                <span style="font-size:0.75rem; color:#94a3b8;">UUID: <code>{st.session_state.conversation_id[:16]}...</code></span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Preset Quick Suggestion Chips
-    st.markdown("**Quick Prompts:**")
-    cp1, cp2, cp3 = st.columns(3)
+    # Preset Quick Suggestion Prompts Row
+    st.markdown("##### 💡 Suggested Queries")
+    cp1, cp2, cp3, cp4 = st.columns(4)
     preset_clicked = None
     with cp1:
-        if st.button("🚨 What is our highest risk contract?", use_container_width=True):
+        if st.button("🚨 Highest Risk Contract", use_container_width=True):
             preset_clicked = "What is our highest risk contract?"
     with cp2:
-        if st.button("🏢 Show me Acme Corp MSA risks", use_container_width=True):
+        if st.button("🏢 Acme Corp Exposure", use_container_width=True):
             preset_clicked = "Show me Acme Corp MSA risks"
     with cp3:
-        if st.button("⚖️ Summarize indemnification clauses", use_container_width=True):
+        if st.button("⚖️ Indemnification Terms", use_container_width=True):
             preset_clicked = "Summarize indemnification clauses"
-
-    # Chat Message Container
-    chat_container = st.container()
-    with chat_container:
-        for msg in st.session_state.chat_history:
-            if msg["sender"] == "user":
-                st.markdown(f"""
-                <div class="chat-user">
-                    <b>👤 You ({msg['timestamp']}):</b><br>{msg['text']}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="chat-agent">
-                    <b>🤖 ProcureMind AI ({msg['timestamp']}):</b><br>{msg['text']}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Transparent Agent Trace Accordion
-                if msg.get("agentTrace"):
-                    with st.expander("🔍 View Transparent Agent Execution Trace", expanded=False):
-                        trace_html = "<br>".join([f"• <code>{t}</code>" for t in msg["agentTrace"]])
-                        st.markdown(f"<div class='trace-box'>{trace_html}</div>", unsafe_allow_html=True)
-
-    # Chat Input Box
-    user_input = st.text_input("Ask ProcureMind AI a question...", key="chat_input_text", placeholder="Type your contract query here...")
-    
-    send_query = preset_clicked or user_input
-    if st.button("Send Query to AI Agent", type="primary") or preset_clicked:
-        if send_query:
-            now_time = datetime.now().strftime("%H:%M")
-            st.session_state.chat_history.append({
-                "sender": "user",
-                "text": send_query,
-                "timestamp": now_time
-            })
-            
-            with st.spinner(f"Agent calling backend AI service (waiting up to {API_TIMEOUT}s)..."):
-                response = send_chat_api(send_query, st.session_state.conversation_id)
-                
-                st.session_state.chat_history.append({
+    with cp4:
+        if st.button("🧹 Clear Chat", use_container_width=True):
+            st.session_state.chat_history = [
+                {
                     "sender": "agent",
-                    "text": response.get("answer", "No answer returned from API Gateway."),
+                    "text": "Chat session reset. I am **ProcureMind AI**. How can I assist with your contract portfolio today?",
                     "timestamp": datetime.now().strftime("%H:%M"),
-                    "agentTrace": response.get("agentTrace", [])
-                })
+                    "agentTrace": ["Reset chat history buffer"]
+                }
+            ]
             st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Chat Message Thread
+    for msg in st.session_state.chat_history:
+        if msg["sender"] == "user":
+            st.markdown(f"""
+            <div class="chat-user-bubble">
+                <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:6px;">👤 <b>You</b> • {msg['timestamp']}</div>
+                <div>{msg['text']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="chat-agent-bubble">
+                <div style="font-size:0.8rem; color:#3b82f6; margin-bottom:6px;">🤖 <b>ProcureMind AI</b> • {msg['timestamp']}</div>
+                <div>{msg['text']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Transparent Agent Execution Trace Accordion
+            if msg.get("agentTrace"):
+                with st.expander("🔍 View Transparent Agent Execution Trace", expanded=False):
+                    trace_html = "<br>".join([f"• ⚙️ <code>{t}</code>" for t in msg["agentTrace"]])
+                    st.markdown(f"<div class='trace-box'>{trace_html}</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Input Form
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_input("Ask ProcureMind AI a question...", placeholder="Type your contract or vendor query here...", label_visibility="collapsed")
+        c_submit, _ = st.columns([1, 4])
+        with c_submit:
+            submitted = st.form_submit_button("Send Query to AI Agent 🚀", type="primary", use_container_width=True)
+
+    send_query = preset_clicked or (user_input if submitted else None)
+
+    if send_query:
+        now_time = datetime.now().strftime("%H:%M")
+        st.session_state.chat_history.append({
+            "sender": "user",
+            "text": send_query,
+            "timestamp": now_time
+        })
+        
+        with st.spinner(f"Agent calling backend AI service (waiting up to {API_TIMEOUT}s)..."):
+            response = send_chat_api(send_query, st.session_state.conversation_id)
+            
+            answer_text = response.get("answer") or response.get("response") or response.get("text") or "No answer returned from API Gateway."
+            trace_list = response.get("agentTrace") or response.get("trace") or []
+            
+            st.session_state.chat_history.append({
+                "sender": "agent",
+                "text": answer_text,
+                "timestamp": datetime.now().strftime("%H:%M"),
+                "agentTrace": trace_list
+            })
+        st.rerun()
 
 # --- 12. MAIN APP ROUTER ---
 def main():
     render_header()
     st.markdown("---")
     
-    selected_tab, show_chat = render_sidebar()
+    selected_tab = render_sidebar()
     df = load_merged_contracts()
 
     # Route screen based on sidebar choice
@@ -697,10 +817,8 @@ def main():
         render_vendors_portfolio(df)
     elif selected_tab == "📤 Ingestion Pipeline":
         render_upload_modal()
-
-    # Persistent Agentic Chat Assistant Drawer
-    if show_chat:
-        render_agentic_chat_drawer()
+    elif selected_tab == "🤖 ProcureMind AI Assistant":
+        render_agentic_chat_page()
 
 if __name__ == "__main__":
     main()

@@ -27,6 +27,12 @@ public class IndexingService {
 
         List<PageIndexNode> unindexedNodes = nodeRepository.findByDocumentIdAndSummaryIsNull(documentId);
 
+        if (unindexedNodes.isEmpty()) {
+            log.info("All nodes for contract [{}] are already indexed. Publishing page indexed event.", documentId);
+            eventProducer.publishPageIndexed(documentId);
+            return;
+        }
+
         for (PageIndexNode node: unindexedNodes) {
             try {
                 NodeSummary aiResponse = indexingAgent.summarize((node.getRawContext()));

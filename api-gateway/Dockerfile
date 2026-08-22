@@ -1,25 +1,20 @@
-# Stage 1: Build Stage
-FROM eclipse-temurin:21-jdk-alpine AS builder
+# Stage 1: Build
+FROM maven:3.9.9-eclipse-temurin-21-alpine AS builder
 WORKDIR /build
 
-# Copy Maven wrapper and root POM
-COPY mvnw .
-COPY .mvn .mvn
-COPY pom.xml .
+# Copy api-gateway pom.xml and source code
+COPY api-gateway/pom.xml ./api-gateway/pom.xml
+COPY api-gateway/src ./api-gateway/src
 
-# Copy gateway service source
-COPY api-gateway/ ./api-gateway/
+# Package the standalone Spring Boot application
+RUN mvn clean package -f ./api-gateway/pom.xml -DskipTests
 
-RUN chmod +x mvnw
-
-# Package api-gateway
-RUN ./mvnw clean package -pl api-gateway -DskipTests
-
-# Stage 2: Runtime Stage
+# Stage 2: Runtime
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
 COPY --from=builder /build/api-gateway/target/*.jar app.jar
 
 EXPOSE 8080
+
 ENTRYPOINT ["java", "-jar", "app.jar"]

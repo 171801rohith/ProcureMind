@@ -32,7 +32,7 @@ public interface ContractAnalysisRepository extends JpaRepository<ContractAnalys
     long countHighRiskContracts();
 
     @Query("SELECT AVG(c.riskScore) FROM ContractAnalysis c")
-    double getAverageRiskScore();
+    Double getAverageRiskScore();
 
     List<ContractAnalysis> findByContractIdIn(List<UUID> contractIds);
 

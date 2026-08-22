@@ -4,7 +4,7 @@
 
 ---
 
-## Purpose & Architectural Role
+## 1. Purpose & Architectural Role
 
 In an asynchronous event-driven architecture, microservices must share immutable event contracts without introducing tight compile-time coupling between domain services. `procuremind-common` fulfills this role by establishing a centralized schema repository for Apache Kafka event payloads.
 
@@ -22,15 +22,31 @@ graph TD
 
 ---
 
-## Event Contracts & Data Transfer Objects
+## 2. Structure
+
+```
+procuremind-common/
+├── pom.xml                                   # Maven build configuration
+├── README.md                                 # Module documentation
+└── src/
+    └── main/
+        └── java/com/procuremind/
+            ├── Main.java                     # Library entry placeholder
+            └── common/
+                └── dto/
+                    ├── ContractUploadedEvent.java # Kafka event record for new contract uploads
+                    └── PageIndexedEvent.java      # Kafka event record for indexing/analysis transitions
+```
+
+---
+
+## 3. Event Contracts & Data Transfer Objects
 
 All event contracts are modeled as immutable Java **Records** for thread safety, concise syntax, and seamless JSON serialization via Jackson and Spring Kafka.
 
-### 1. `ContractUploadedEvent`
-* **Package**: `com.procuremind.common.dto`
-* **File**: `ContractUploadedEvent.java`
-* **Produced By**: `contract-service` (in `ContractEventProducer`)
-* **Consumed By**: `ai-service` (in `ContractEventListener`)
+### 1. `ContractUploadedEvent` (`src/main/java/com/procuremind/common/dto/ContractUploadedEvent.java`)
+* **Produced By**: `contract-service` (`ContractEventProducer`)
+* **Consumed By**: `ai-service` (`ContractEventListener`)
 * **Kafka Topic**: `contract.uploaded`
 * **Purpose**: Emitted immediately after a contract file is successfully uploaded to MinIO object storage and saved in PostgreSQL.
 
@@ -53,11 +69,9 @@ public record ContractUploadedEvent(
 
 ---
 
-### 2. `PageIndexedEvent`
-* **Package**: `com.procuremind.common.dto`
-* **File**: `PageIndexedEvent.java`
-* **Produced By**: `ai-service` (in `ContractEventProducer`)
-* **Consumed By**: `contract-service` & `ai-service` (in `ContractEventListener`)
+### 2. `PageIndexedEvent` (`src/main/java/com/procuremind/common/dto/PageIndexedEvent.java`)
+* **Produced By**: `ai-service` (`ContractEventProducer`)
+* **Consumed By**: `contract-service` & `ai-service` (`ContractEventListener`)
 * **Kafka Topics**: `contract.indexed`, `contract.analyzed`
 * **Purpose**: Emitted by `ai-service` upon completing document section indexing or contract AI analysis to propagate state transitions.
 
@@ -78,25 +92,23 @@ public record PageIndexedEvent(
 
 ---
 
-## Module Boundaries & Best Practices
+## 4. Module Boundaries & Design Constraints
 
-To maintain loose coupling and prevent architectural erosion, `procuremind-common` follows strict boundary rules:
+To maintain loose coupling and prevent architectural erosion, `procuremind-common` adheres to strict architectural boundaries:
 
 ### Allowed Content
 ✓ Immutable Java records and DTO contracts.  
-✓ Shared system constants and event topic name contracts.  
-✓ Custom exception types shared across domain boundaries (if applicable).  
+✓ Shared system constants and event topic name definitions.  
+✓ Custom exception types shared across domain boundaries.  
 
 ### Prohibited Content (Anti-Patterns)
-❌ **Zero Business Logic**: No `@Service`, `@Component`, or business calculations.  
+❌ **Zero Business Logic**: No `@Service`, `@Component`, or business processing logic.  
 ❌ **Zero Database Dependencies**: No JPA entities, `@Table` annotations, or ORM mappings.  
 ❌ **Zero Infrastructure Beans**: No Kafka listener definitions, Web MVC controllers, or Spring Security configurations.  
 
 ---
 
-## Integration Guide
-
-To consume `procuremind-common` in downstream microservices:
+## 5. Integration Guide
 
 ### 1. Add Maven Dependency
 
@@ -123,5 +135,5 @@ spring:
 
 ```bash
 cd procuremind-common
-./mvnw clean install
+./mvnw clean install -DskipTests
 ```

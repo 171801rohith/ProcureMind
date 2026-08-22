@@ -4,7 +4,7 @@ The **API Gateway** is the single entry-point reverse proxy for the **ProcureMin
 
 ---
 
-## Architectural Role
+## 1. Purpose & Architectural Role
 
 In the ProcureMind microservices topology, the API Gateway resides at the edge layer, exposing port `8080`. It decouples client applications (such as `procuremind-ui`) from downstream internal service network topologies, allowing services to scale or relocate without impacting API consumers.
 
@@ -37,45 +37,50 @@ flowchart LR
 
 ---
 
-## Service Responsibilities & Boundaries
-
-### Responsibilities
-* **Unified Request Routing**: Routes contract lifecycle operations (`/api/contracts/**`) to `contract-service` and AI document analytics requests (`/api/analysis/**`) to `ai-service`.
-* **Health Probe Proxying**: Aggregates downstream Actuator endpoints via clean public health path aliases (`/health/contract` and `/health/ai`).
-* **Environment-Driven Endpoint Resolution**: Supports dynamic target URI configuration via system environment variables (`CONTRACT_SERVICE_URL`, `AI_SERVICE_URL`).
-* **Centralized Observability**: Exposes gateway-level Spring Boot Actuator endpoints for system health and build information.
-
-### Module Boundaries & Anti-Patterns
-* **No Business Logic**: Must never perform database lookups, business validations, or event processing.
-* **No File Parsing**: Must pass multipart form data streams directly to `contract-service` without inspecting or caching byte buffers.
-* **No Token Manipulation**: Operates as a thin proxy router; authentication and payload transformation remain isolated within respective domain services.
-
----
-
-## Package Breakdown & Core Classes
+## 2. Structure
 
 ```
 api-gateway/
-├── pom.xml
-├── README.md
+├── pom.xml                                   # Maven build configuration & Spring Cloud dependencies
+├── README.md                                 # Module documentation
 └── src/
-    └── main/
-        ├── java/
-        │   └── com/procuremind/api_gateway/
-        │       └── ApiGatewayApplication.java
-        └── resources/
-            └── application.yaml
+    ├── main/
+    │   ├── java/com/procuremind/api_gateway/
+    │   │   └── ApiGatewayApplication.java    # Spring Boot application entry point
+    │   └── resources/
+    │       └── application.yaml              # Declarative routes, predicates, and filters
+    └── test/
+        └── java/com/procuremind/api_gateway/
+            └── ApiGatewayApplicationTests.java
 ```
-
-### Core Classes & Files
-* **[ApiGatewayApplication.java](file:///r:/Projects/ProcureMind/api-gateway/src/main/java/com/procuremind/api_gateway/ApiGatewayApplication.java)**: Spring Boot application entry point marked with `@SpringBootApplication`.
-* **[application.yaml](file:///r:/Projects/ProcureMind/api-gateway/src/main/resources/application.yaml)**: Declarative gateway routing configuration, predicate rules, path rewriting filters, and logging levels.
 
 ---
 
-## Gateway Route Configuration
+## 3. How It Works
 
-The API Gateway routes traffic based on declarative predicates defined in `application.yaml`:
+### Execution Flow: Request ➔ Predicate Matching ➔ Route Forwarding
+
+```
+1. [Inbound Request]: Client sends HTTP request to http://localhost:8080.
+2. [Route Evaluation]: Spring Cloud Gateway WebMVC matches path predicates defined in application.yaml.
+3. [Filter Execution]: For health check routes (/health/contract, /health/ai), the SetPath filter rewrites the path to /actuator/health.
+4. [Forwarding]: Request is proxied to the configured downstream target URL (CONTRACT_SERVICE_URL or AI_SERVICE_URL).
+5. [Response]: Returns downstream response directly to the client with identical HTTP status and headers.
+```
+
+---
+
+## 4. Key Classes & Components
+
+### 1. `ApiGatewayApplication` (`src/main/java/com/procuremind/api_gateway/ApiGatewayApplication.java`)
+- Application bootstrap class annotated with `@SpringBootApplication`.
+
+### 2. `application.yaml` (`src/main/resources/application.yaml`)
+- Declarative configuration declaring all route definitions, predicates, filter actions, actuator exposures, and logging levels.
+
+---
+
+## 5. Gateway Route Configuration
 
 ```yaml
 spring:
@@ -109,7 +114,7 @@ spring:
                 - SetPath=/actuator/health
 ```
 
-### Routing Summary Table
+### Route Summary Table
 
 | Route ID | Inbound Path Predicate | Filter Action | Target Downstream Service | Default Fallback URL |
 | :--- | :--- | :--- | :--- | :--- |
@@ -120,7 +125,7 @@ spring:
 
 ---
 
-## Environment Variables
+## 6. Environment Variables
 
 | Variable Name | Default Value | Description |
 | :--- | :--- | :--- |
@@ -130,37 +135,38 @@ spring:
 
 ---
 
-## Development & Execution
+## 7. Observability & Health Probes
 
-### Building the Gateway
-```bash
-./mvnw clean package -DskipTests
-```
+The gateway exposes its own health probes and proxies downstream service health:
+
+* **Gateway Health**: `GET http://localhost:8080/actuator/health`
+* **Proxied Contract Service Health**: `GET http://localhost:8080/health/contract`
+* **Proxied AI Service Health**: `GET http://localhost:8080/health/ai`
+
+---
+
+## 8. How to Run
+
+### Prerequisites
+- Java 21 JDK installed.
+- Downstream services running (`contract-service` on port 8081, `ai-service` on port 8082).
 
 ### Running Locally
 ```bash
 ./mvnw spring-boot:run
 ```
 
-### Running with Custom Service Locations
+### Running with Custom Target URLs
 ```bash
-CONTRACT_SERVICE_URL=http://10.0.1.5:8081 AI_SERVICE_URL=http://10.0.1.6:8082 ./mvnw spring-boot:run
+CONTRACT_SERVICE_URL=http://localhost:8081 AI_SERVICE_URL=http://localhost:8082 ./mvnw spring-boot:run
 ```
 
 ---
 
-## Observability & Diagnostics
+## 9. Troubleshooting
 
-The gateway exposes full health probes and detailed debug logging:
-
-* **Gateway Health**: `GET http://localhost:8080/actuator/health`
-* **Proxied Contract Service Health**: `GET http://localhost:8080/health/contract`
-* **Proxied AI Service Health**: `GET http://localhost:8080/health/ai`
-
-Debug logging is configured for Spring Cloud Gateway and Web MVC in `application.yaml`:
-```yaml
-logging:
-  level:
-    org.springframework.cloud.gateway: DEBUG
-    org.springframework.web: DEBUG
-```
+1. **`503 Service Unavailable` or `502 Bad Gateway`**:
+   - Verify downstream microservices are running on ports 8081 (`contract-service`) and 8082 (`ai-service`).
+   - Check target URL environment variables `CONTRACT_SERVICE_URL` and `AI_SERVICE_URL`.
+2. **Health endpoint returns 404**:
+   - Ensure downstream services have Spring Boot Actuator enabled on `/actuator/health`.

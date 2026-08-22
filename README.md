@@ -1,6 +1,6 @@
 # ProcureMind — AI-Native Procurement Contract Analysis Platform
 
-**ProcureMind** is an enterprise-grade, event-driven microservices platform engineered to automate legal contract ingestion, hierarchical document indexing, vendor compliance tracking, and AI-powered risk scoring. Built on **Spring Boot 4.0.7**, **Spring AI 1.1.0**, **Spring Cloud Gateway WebMVC**, **Apache Kafka**, **MinIO Object Storage**, **PostgreSQL**, and **Ollama (Qwen2.5 7B)**, ProcureMind turns raw procurement PDFs into structured, actionable intelligence.
+**ProcureMind** is an enterprise-grade, event-driven microservices platform engineered to automate legal contract ingestion, hierarchical document indexing, vendor compliance tracking, and AI-powered risk scoring. Built on **Spring Boot 4.0.7**, **Spring AI 1.1.0**, **Spring Cloud Gateway WebMVC**, **Apache Kafka**, **MinIO Object Storage**, **PostgreSQL**, and **Google Gemini API (Gemini 2.5 Flash)**, ProcureMind turns raw procurement PDFs into structured, actionable intelligence.
 
 ---
 
@@ -25,8 +25,8 @@ flowchart TB
     end
 
     subgraph Data & Storage Layer
-        PG[("PostgreSQL Database\nprocuremind_db [Port 5433]")]
-        MINIO[("MinIO Object Storage\nprocuremind-contracts [Port 9000/9001]")]
+        PG[("PostgreSQL Database\nprocuremind_db [Port 5433 / 5432]")]
+        MINIO[("MinIO Object Storage\nprocuremind-contracts [Port 9000 / 9001]")]
     end
 
     subgraph Message Broker
@@ -34,15 +34,15 @@ flowchart TB
     end
 
     subgraph AI Engine
-        OLLAMA["Ollama LLM Server\nqwen2.5:7b [Port 11434]"]
+        GEMINI["Google Gemini API\ngemini-2.5-flash [Cloud LLM]"]
     end
 
     UI -->|HTTP / JSON| GW
     GW -->|Route /api/contracts/**| CS
     GW -->|Route /api/analysis/**| AI
 
-    CS -->|Dependencies| COMMON
-    AI -->|Dependencies| COMMON
+    CS -->|Classpath Dependency| COMMON
+    AI -->|Classpath Dependency| COMMON
 
     CS -->|Persist Metadata| PG
     CS -->|Upload PDF Files| MINIO
@@ -51,12 +51,14 @@ flowchart TB
     KAFKA -->|Consume contract.uploaded| AI
     AI -->|Read PDF Stream| MINIO
     AI -->|Persist Nodes & Risk Models| PG
-    AI -->|Prompt / Agent Function Call| OLLAMA
+    AI -->|Prompt / Agent Function Call| GEMINI
     AI -->|Publish contract.indexed| KAFKA
     AI -->|Publish contract.analyzed| KAFKA
 
     KAFKA -->|Consume contract.indexed / contract.analyzed| CS
 ```
+
+> 📖 **Deep Dive Documentation**: For exhaustive architectural specifications, sequence diagrams, database entity-relationship models, and agent workflows, see [System Architecture Specification](docs/architecture.md).
 
 ---
 
@@ -65,8 +67,8 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User
-    participant UI as ProcureMind UI (Streamlit)
+    actor User as Procurement Officer
+    participant UI as ProcureMind UI (8501)
     participant GW as API Gateway (8080)
     participant CS as Contract Service (8081)
     participant MinIO as MinIO Storage (9000)
@@ -100,7 +102,7 @@ sequenceDiagram
 
     Kafka->>AI: ContractEventListener consumes "contract.indexed"
     AI->>Ollama: AnalysisAgent invokes LLM with ContractAnalysisTools
-    Note over AI,Ollama: Agent calls getContractSummary, getClauseContent, getVendorHistory
+    Note over AI,Ollama: Agent calls getContractSummary, getClauseContent
     Ollama-->>AI: Returns ContractAnalysisResultDto (risk score, recommendation, risks)
     AI->>DB: Save ContractAnalysis, ContractMetadata, & AnalysisRisk list
     AI->>Kafka: Publish PageIndexedEvent to topic "contract.analyzed"
@@ -118,11 +120,12 @@ sequenceDiagram
 
 | Module | Technologies | Description |
 | :--- | :--- | :--- |
-| **[api-gateway](file:///r:/Projects/ProcureMind/api-gateway/README.md)** | Java 21, Spring Boot 4.0.7, Spring Cloud Gateway WebMVC | Single entry-point proxy routing inbound HTTP requests to downstream microservices and proxying Actuator health checks. |
-| **[procuremind-common](file:///r:/Projects/ProcureMind/procuremind-common/README.md)** | Java 21 | Shared record-based DTOs and Kafka event contracts (`ContractUploadedEvent`, `PageIndexedEvent`). |
-| **[contract-service](file:///r:/Projects/ProcureMind/contract-service/README.md)** | Java 21, Spring Boot 4.0.7, JPA, MinIO SDK, Kafka | Bounded context owning contract upload, file persistence to MinIO, contract metadata status lifecycle, and state propagation. |
-| **[ai-service](file:///r:/Projects/ProcureMind/ai-service/README.md)** | Java 21, Spring Boot 4.0.7, Spring AI, Apache Tika, Ollama | Bounded context for PDF parsing, hierarchical section indexing (`IndexingAgent`), LLM tool-calling analysis (`AnalysisAgent`), risk scoring, and analytical queries. |
-| **[procuremind-ui](file:///r:/Projects/ProcureMind/procuremind-ui/README.md)** | Python 3.13, Streamlit, Pandas, Plotly | Front-end web dashboard aggregating CQRS read models across `contract-service` and `ai-service` via `api-gateway`. |
+| **[api-gateway](api-gateway/README.md)** | Java 21, Spring Boot 4.0.7, Spring Cloud Gateway WebMVC | Single entry-point reverse proxy routing inbound HTTP requests to downstream microservices and proxying Actuator health checks. |
+| **[procuremind-common](procuremind-common/README.md)** | Java 21 | Shared record-based DTOs and Kafka event contracts (`ContractUploadedEvent`, `PageIndexedEvent`). |
+| **[contract-service](contract-service/README.md)** | Java 21, Spring Boot 4.0.7, JPA, MinIO SDK, Kafka | Bounded context owning contract upload, file persistence to MinIO, contract metadata status lifecycle, and state propagation. |
+| **[ai-service](ai-service/README.md)** | Java 21, Spring Boot 4.0.7, Spring AI, Apache Tika, Google Gemini | Bounded context for PDF parsing, hierarchical section indexing (`IndexingAgent`), LLM tool-calling analysis (`AnalysisAgent`), conversational assistant (`ChatAgent`), risk scoring, and analytical queries. |
+| **[procuremind-ui](procuremind-ui/README.md)** | Python 3.13, Streamlit, Pandas, Plotly | Front-end web dashboard aggregating CQRS read models across `contract-service` and `ai-service` via `api-gateway`. |
+| **[DummyContracts](DummyContracts/README.md)** | PDF Agreements, JSON Datasets | Sample legal contracts and exported database test fixtures for seeding and offline verification. |
 
 ---
 
@@ -132,11 +135,10 @@ ProcureMind relies on dockerized infrastructure managed via `docker-compose.yaml
 
 ```yaml
 services:
-  postgres:      # PostgreSQL 15 Database (Port 5433 -> 5432)
+  postgres:      # PostgreSQL 15 Database (Port 5433 Host -> 5432 Container)
   minio:         # MinIO Object Storage (Ports 9000 API / 9001 Web Console)
   kafka:         # Confluent Kafka 7.4.4 KRaft Broker (Port 9092)
-  ollama:        # Ollama LLM Engine with NVIDIA GPU acceleration (Port 11434)
-  kafka-ui:      # Kafka Management Dashboard (Port 8085 -> 8080)
+  kafka-ui:      # Kafka Management Dashboard (Port 8085 Host -> 8080 Container)
 ```
 
 ---
@@ -149,9 +151,9 @@ ProcureMind uses PostgreSQL (`procuremind_db`) hosting tables across two bounded
 * `contracts`: Primary record tracking contract UUID, filename, vendor name, status (`UPLOADED`, `INDEXED`, `ANALYZED`), MinIO object key, and upload timestamp.
 
 ### 2. AI & Analysis Bounded Context (`ai-service`)
-* `page_index_nodes`: Hierarchical document structure (ROOT, ARTICLE, SECTION) storing raw section text, AI generated titles, summaries, and node ordering.
+* `page_index_nodes`: Hierarchical document structure (`ROOT`, `ARTICLE`, `SECTION`) storing raw section text, AI generated titles, summaries, and node ordering.
 * `contract_metadata`: Key metadata extracted during AI analysis (contract type, total dollar amount).
-* `contract_analyses`: Overall risk assessment score (1.0 to 10.0), recommendation, processing status, and timestamp.
+* `contract_analysis`: Overall risk assessment score (1.0 to 10.0), recommendation, processing status, and timestamp.
 * `analysis_risks`: Granular risk entries associated with a contract analysis (severity: `HIGH`, `MEDIUM`, `LOW`, description).
 
 ---
@@ -174,29 +176,55 @@ Communication across microservices is non-blocking and mediated by Kafka topics:
 * **Java 21 JDK**
 * **Maven 3.9+** (or included `mvnw` wrappers)
 * **Python 3.13+** (with `uv` or `pip`)
-* **Docker Desktop** (with GPU support enabled for Ollama if available)
+* **Docker Desktop**
+* **Google Gemini API Key** (from [Google AI Studio](https://aistudio.google.com/))
 
-### Step 1: Start Infrastructure Containers
+### Option A: Run Complete Stack with Docker Compose (Recommended)
+
+From the project root:
 
 ```bash
-docker-compose up -d
+# 1. Configure your Gemini API key
+cp .env.example .env
+# Edit .env and set GEMINI_API_KEY=your_key_here
+
+# 2. Build and launch all infrastructure, microservices, and UI containers
+docker compose up --build -d
 ```
 
-Verify services are running:
-* **Kafka UI**: `http://localhost:8085`
-* **MinIO Console**: `http://localhost:9001` (User: `admin` / Password: `password`)
-* **Ollama API**: `http://localhost:11434`
+Once started:
+* **Streamlit Executive UI**: `http://localhost:8501`
+* **API Gateway**: `http://localhost:8080`
+* **Kafka UI Dashboard**: `http://localhost:8085`
+* **MinIO Storage Console**: `http://localhost:9001` (User: `admin` / Password: `password`)
 
-### Step 2: Pull LLM Model in Ollama
+To view logs across all services:
+```bash
+docker compose logs -f
+```
+
+To shut down the platform:
+```bash
+docker compose down
+```
+
+---
+
+### Option B: Local Development (Hybrid)
+
+If developing microservices locally with IDEs while running infrastructure in Docker:
+
+#### Step 1: Start Infrastructure Containers Only
 
 ```bash
+docker compose up postgres minio kafka ollama kafka-ui -d
 docker exec -it procuremind-ollama ollama pull qwen2.5:7b
 ```
 
-### Step 3: Build Monorepo Dependencies
+#### Step 2: Build Monorepo Dependencies
 
 ```bash
-# Build procuremind-common shared library first
+# Build procuremind-common shared library
 cd procuremind-common
 ./mvnw clean install -DskipTests
 cd ..
@@ -205,7 +233,7 @@ cd ..
 ./mvnw clean compile -DskipTests
 ```
 
-### Step 4: Run Microservices
+#### Step 3: Run Microservices Locally
 
 Launch services in separate terminal windows:
 
@@ -224,11 +252,9 @@ cd api-gateway
 
 # Terminal 4: Streamlit UI
 cd procuremind-ui
-pip install -r pyproject.toml # or uv sync
-streamlit run main.py
+uv sync && uv run streamlit run main.py
+# Or with standard pip: streamlit run main.py
 ```
-
-Access the Streamlit Dashboard at `http://localhost:8501` or route API calls through API Gateway at `http://localhost:8080`.
 
 ---
 
@@ -251,6 +277,11 @@ ProcureMind/
 ├── docker-compose.yaml           # Infrastructure setup (Postgres, MinIO, Kafka, Ollama, Kafka-UI)
 ├── pom.xml                       # Parent Maven POM
 ├── README.md                     # Root Architecture & System Documentation
+├── docs/                         # Consolidated Architecture & Diagrams
+│   ├── architecture.md           # System Architecture Deep Dive
+│   └── images/                   # System diagrams and screenshots
+├── DummyContracts/               # Sample PDF agreements and test datasets
+│   └── README.md
 ├── api-gateway/                  # Spring Cloud Gateway WebMVC service
 │   ├── pom.xml
 │   ├── README.md

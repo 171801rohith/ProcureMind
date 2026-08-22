@@ -23,7 +23,7 @@ CREATE TABLE contract_analysis
     id             UUID NOT NULL,
     contract_id    UUID NOT NULL,
     risk_score     DOUBLE PRECISION,
-    recommendation VARCHAR(255),
+    recommendation TEXT,
     status         VARCHAR(255),
     created_at     TIMESTAMP WITHOUT TIME ZONE,
     CONSTRAINT pk_contract_analysis PRIMARY KEY (id)

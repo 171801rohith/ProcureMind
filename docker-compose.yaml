@@ -1,18 +1,19 @@
-version: '3.8'
-
 services:
   # ---------------------------------------------------------------------------
-  # INFRASTRUCTURE SERVICES
+  # 1. INFRASTRUCTURE LAYER
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:15-alpine
     container_name: procuremind-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: procuremind_db
     ports:
       - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d procuremind_db"]
       interval: 5s
@@ -22,6 +23,7 @@ services:
   minio:
     image: minio/minio
     container_name: procuremind-minio
+    restart: unless-stopped
     environment:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: password
@@ -29,6 +31,8 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    volumes:
+      - minio_data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -38,6 +42,7 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.4.4
     container_name: procuremind-kafka
+    restart: unless-stopped
     ports:
       - "9092:9092"
     environment:
@@ -54,32 +59,17 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 29092 || exit 1"]
-      interval: 5s
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: procuremind-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: procuremind-kafka-ui
+    restart: unless-stopped
     ports:
       - "8085:8080"
     environment:
@@ -91,13 +81,14 @@ services:
         condition: service_healthy
 
   # ---------------------------------------------------------------------------
-  # PROCUREMIND MICROSERVICES
+  # 2. BACKEND MICROSERVICES
   # ---------------------------------------------------------------------------
   contract-service:
     build:
       context: .
       dockerfile: contract-service/Dockerfile
     container_name: procuremind-contract-service
+    restart: unless-stopped
     ports:
       - "8081:8081"
     environment:
@@ -105,6 +96,9 @@ services:
       SPRING_DATASOURCE_USERNAME: user
       SPRING_DATASOURCE_PASSWORD: password
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: password
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,6 +112,7 @@ services:
       context: .
       dockerfile: ai-service/Dockerfile
     container_name: procuremind-ai-service
+    restart: unless-stopped
     ports:
       - "8082:8082"
     environment:
@@ -125,7 +120,12 @@ services:
       SPRING_DATASOURCE_USERNAME: user
       SPRING_DATASOURCE_PASSWORD: password
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
+      SPRING_AI_OPENAI_BASE_URL: https://generativelanguage.googleapis.com/v1beta/openai/
+      SPRING_AI_OPENAI_API_KEY: ${GEMINI_API_KEY:-}
+      SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: password
     depends_on:
       postgres:
         condition: service_healthy
@@ -133,22 +133,42 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      ollama:
-        condition: service_started
 
   api-gateway:
     build:
       context: .
       dockerfile: api-gateway/Dockerfile
     container_name: procuremind-api-gateway
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
       CONTRACT_SERVICE_URL: http://contract-service:8081
       AI_SERVICE_URL: http://ai-service:8082
     depends_on:
-      - contract-service
-      - ai-service
+      contract-service:
+        condition: service_started
+      ai-service:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # 3. FRONTEND UI
+  # ---------------------------------------------------------------------------
+  procuremind-ui:
+    build:
+      context: ./procuremind-ui
+      dockerfile: Dockerfile
+    container_name: procuremind-streamlit-ui
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      GATEWAY_URL: http://api-gateway:8080
+      API_TIMEOUT: "120"
+    depends_on:
+      api-gateway:
+        condition: service_started
 
 volumes:
-  ollama_data:
+  postgres_data:
+  minio_data:

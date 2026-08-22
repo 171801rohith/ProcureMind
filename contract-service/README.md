@@ -1,21 +1,21 @@
 # ProcureMind — Contract Service (`contract-service`)
 
-The **Contract Service** owns the **Contract Ingestion and Lifecycle Bounded Context** in the **ProcureMind** microservices ecosystem. Operating on port `8081`, it handles HTTP multipart contract PDF uploads, stores physical files in **MinIO Object Storage**, persists metadata in **PostgreSQL**, emits domain lifecycle events to **Apache Kafka**, and updates contract state asynchronously based on AI processing feedback.
+The **Contract Service** owns the **Contract Ingestion and Lifecycle Bounded Context** in the **ProcureMind** microservices ecosystem. Operating on port `8081`, it handles HTTP multipart contract PDF uploads, streams physical files to **MinIO Object Storage**, persists metadata in **PostgreSQL**, emits domain lifecycle events to **Apache Kafka**, and synchronizes contract processing status asynchronously.
 
 ---
 
-## Service Overview & Bounded Context
+## 1. Purpose & Architectural Role
 
-`contract-service` is responsible for contract metadata management and physical object storage. It isolates file ingestion concerns from downstream AI analysis compute heavy lifting.
+`contract-service` serves as the authoritative system of record for contract metadata and physical document storage. It isolates file ingestion concerns from downstream AI analysis pipelines.
 
 ```mermaid
 flowchart LR
     subgraph Ingestion Edge
-        Client[Client / Gateway]
+        Client[Client / API Gateway]
     end
 
     subgraph Contract Service Bounded Context
-        CTRL["ContractController"]
+        CTRL["ContractController\n(/api/contracts)"]
         SVC["ContractService"]
         STORAGE["StorageService"]
         REPO["ContractRepository"]
@@ -24,9 +24,9 @@ flowchart LR
     end
 
     subgraph External Infrastructure
-        MINIO[("MinIO Bucket:\nprocuremind-contracts")]
-        DB[("PostgreSQL Table:\ncontracts")]
-        KAFKA["Kafka Broker"]
+        MINIO[("MinIO Bucket:\nprocuremind-contracts\n[Port 9000]")]
+        DB[("PostgreSQL Table:\ncontracts\n[Port 5433]")]
+        KAFKA["Apache Kafka Broker\n[Port 9092]"]
     end
 
     Client -->|POST /api/contracts/upload| CTRL
@@ -44,170 +44,150 @@ flowchart LR
 
 ---
 
-## Features
-
-* **Multipart File Ingestion**: Supports uploading contract PDF documents up to 70MB.
-* **MinIO Object Storage Integration**: Programmatically verifies/creates buckets (`procuremind-contracts`) and streams uploaded files with unique UUID identifiers.
-* **Contract State Machine**: Manages contract lifecycle states: `UPLOADED` ➔ `INDEXED` ➔ `ANALYZED`.
-* **Asynchronous Event Publishing**: Emits `ContractUploadedEvent` payloads to Kafka topic `contract.uploaded`.
-* **State Propagation Listener**: Consumes `PageIndexedEvent` messages from `contract.indexed` and `contract.analyzed` topics to keep status in sync with `ai-service`.
-* **OpenAPI 3.0 / Swagger UI**: Built-in interactive API documentation at `/swagger-ui.html`.
-
----
-
-## Package Breakdown & Core Classes
+## 2. Structure
 
 ```
 contract-service/
-├── pom.xml
-├── README.md
+├── pom.xml                                   # Maven build configuration & dependencies
+├── README.md                                 # Module documentation
 └── src/
-    └── main/
-        ├── java/com/procuremind/contract_service/
-        │   ├── ContractServiceApplication.java
-        │   ├── config/
-        │   │   └── MinioConfig.java
-        │   ├── controller/
-        │   │   └── ContractController.java
-        │   ├── dto/
-        │   │   └── ContractResponseDto.java
-        │   ├── entity/
-        │   │   └── Contract.java
-        │   ├── repository/
-        │   │   └── ContractRepository.java
-        │   ├── service/
-        │   │   ├── ContractService.java
-        │   │   ├── StorageService.java
-        │   │   └── kafka/
-        │   │       ├── ContractEventListener.java
-        │   │       └── ContractEventProducer.java
-        └── resources/
-            ├── application.yaml
-            └── db/migration/
+    ├── main/
+    │   ├── java/com/procuremind/contract_service/
+    │   │   ├── ContractServiceApplication.java# Spring Boot application entry point
+    │   │   ├── config/
+    │   │   │   └── MinioConfig.java           # MinIO client connection configuration
+    │   │   ├── controller/
+    │   │   │   └── ContractController.java    # REST endpoints for contract upload & status
+    │   │   ├── dto/
+    │   │   │   └── ContractResponseDto.java   # Contract metadata response DTO
+    │   │   ├── entity/
+    │   │   │   └── Contract.java              # JPA entity mapped to table 'contracts'
+    │   │   ├── repository/
+    │   │   │   └── ContractRepository.java    # Spring Data JPA repository
+    │   │   └── service/
+    │   │       ├── ContractService.java       # Contract lifecycle coordinator
+    │   │       ├── StorageService.java        # MinIO bucket creation & upload handler
+    │   │       └── kafka/
+    │   │           ├── ContractEventListener.java # Kafka consumer for indexed/analyzed events
+    │   │           └── ContractEventProducer.java # Kafka publisher for contract.uploaded
+    │   └── resources/
+    │       └── application.yaml               # Database, Kafka, and MinIO configuration
+    └── test/
+        └── java/com/procuremind/contract_service/
+            └── ContractServiceApplicationTests.java
 ```
-
-### Core Architecture Components
-
-#### 1. Controller Layer
-* **[ContractController.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/controller/ContractController.java)**: Exposes REST endpoints under `/api/contracts`.
-
-#### 2. Service Layer
-* **[ContractService.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/service/ContractService.java)**: Coordinates contract upload, MinIO storage delegation, database persistence, and event emission within `@Transactional` boundaries.
-* **[StorageService.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/service/StorageService.java)**: Interacts with MinIO SDK to auto-provision the `procuremind-contracts` bucket and upload binary data streams.
-
-#### 3. Kafka Messaging Layer
-* **[ContractEventProducer.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/service/kafka/ContractEventProducer.java)**: Constructs and sends `ContractUploadedEvent` payloads to Kafka topic `contract.uploaded`.
-* **[ContractEventListener.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/service/kafka/ContractEventListener.java)**: Listens on Kafka topics `contract.indexed` and `contract.analyzed` with group ID `contract-processing-group` to update contract entity status.
-
-#### 4. Repository & Data Layer
-* **[ContractRepository.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/repository/ContractRepository.java)**: Spring Data JPA interface for `Contract` entity manipulation.
-* **[Contract.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/entity/Contract.java)**: JPA Entity mapped to table `contracts`.
-
-#### 5. Configuration & DTOs
-* **[MinioConfig.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/config/MinioConfig.java)**: Spring `@Configuration` bean instantiating `MinioClient` (`http://localhost:9000`).
-* **[ContractResponseDto.java](file:///r:/Projects/ProcureMind/contract-service/src/main/java/com/procuremind/contract_service/dto/ContractResponseDto.java)**: External DTO representing contract details.
 
 ---
 
-## Database Entity & Schema
+## 3. How It Works
+
+### Execution Flow: Input ➔ Processing ➔ Output
+
+```
+1. [Input]: Client submits multipart/form-data containing PDF file and optional vendorName to POST /api/contracts/upload.
+2. [Storage]: StorageService verifies existence of the "procuremind-contracts" bucket in MinIO (auto-creating if missing) and streams the binary content with a UUID prefix.
+3. [Persistence]: ContractService persists a new Contract entity in PostgreSQL with initial status "UPLOADED".
+4. [Event Emission]: ContractEventProducer publishes ContractUploadedEvent to Kafka topic "contract.uploaded".
+5. [Response]: Returns HTTP 202 Accepted with ContractResponseDto immediately to prevent blocking the client.
+6. [State Synchronization]: When downstream AI processing completes stages, ContractEventListener consumes "contract.indexed" (updating status to "INDEXED") and "contract.analyzed" (updating status to "ANALYZED").
+```
+
+---
+
+## 4. Key Classes & Components
+
+### 1. `ContractController` (`controller/ContractController.java`)
+- Exposes REST endpoints under `/api/contracts`.
+- Handles multipart uploads with `@RequestPart("file")` and `@RequestParam("vendorName")`.
+
+### 2. `ContractService` (`service/ContractService.java`)
+- Coordinates file storage, database transactions (`@Transactional`), and Kafka event publishing.
+- Methods:
+  - `processNewContract(file, vendorName)`: Ingests file, persists record, emits event.
+  - `getAllContracts()`: Lists all contracts in the repository.
+  - `getContractDetails(contractId)`: Returns single contract metadata.
+  - `getContractStatus(contractId)`: Returns current status map (`{"status": "ANALYZED"}`).
+
+### 3. `StorageService` (`service/StorageService.java`)
+- Encapsulates interaction with `io.minio.MinioClient`.
+- Automatically ensures the `procuremind-contracts` bucket exists.
+- Streams files to MinIO without loading entire files into memory buffers.
+
+### 4. `ContractEventProducer` (`service/kafka/ContractEventProducer.java`)
+- Sends `ContractUploadedEvent` payloads to Kafka topic `contract.uploaded`.
+
+### 5. `ContractEventListener` (`service/kafka/ContractEventListener.java`)
+- Listens to Kafka topics `contract.indexed` and `contract.analyzed` using group ID `contract-processing-group`.
+- Updates contract status to `INDEXED` or `ANALYZED` upon receiving notification events.
+
+---
+
+## 5. Dependencies & Integrations
+
+- **Internal**:
+  - `com.procuremind:procuremind-common`: Shared event DTOs (`ContractUploadedEvent`, `PageIndexedEvent`).
+- **External Dependencies**:
+  - **Spring Boot 4.0.7**: Web MVC, Actuator, and Transaction management.
+  - **Spring Data JPA & PostgreSQL Driver**: Data persistence.
+  - **MinIO Java SDK 8.5.17**: Object storage client.
+  - **Spring Kafka**: Message broker producer and listener.
+  - **SpringDoc OpenAPI 3.0**: Interactive Swagger API documentation.
+
+---
+
+## 6. Database Entity & Schema
 
 Target Database: PostgreSQL (`procuremind_db`)  
 Table Name: `contracts`
 
 ```sql
 CREATE TABLE contracts (
-    id UUID PRIMARY KEY,
-    filename VARCHAR(255) NOT NULL,
+    id                UUID NOT NULL PRIMARY KEY,
+    filename          VARCHAR(255) NOT NULL,
     minio_object_name VARCHAR(255) NOT NULL,
-    vendor_name VARCHAR(255),
-    status VARCHAR(50) NOT NULL,
-    uploaded_at TIMESTAMP NOT NULL
+    vendor_name       VARCHAR(255),
+    status            VARCHAR(50) NOT NULL,
+    uploaded_at       TIMESTAMP WITHOUT TIME ZONE NOT NULL
 );
 ```
 
 ---
 
-## Kafka Event Integration Topology
+## 7. REST API Specification
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant CS as ContractService
-    participant Prod as ContractEventProducer
-    participant Kafka as Kafka Broker
-    participant Listen as ContractEventListener
-    participant Repo as ContractRepository
+Base Path: `/api/contracts` (Routed through API Gateway at port `8080` or direct at port `8081`).
 
-    CS->>Prod: publishContractUploadEvent(id, vendor, filename, minioKey)
-    Prod->>Kafka: Send ContractUploadedEvent to "contract.uploaded"
-    
-    Kafka-->>Listen: KafkaListener consumes "contract.indexed"
-    Listen->>Repo: Update status to "INDEXED"
-    
-    Kafka-->>Listen: KafkaListener consumes "contract.analyzed"
-    Listen->>Repo: Update status to "ANALYZED"
-```
+| HTTP Method | Endpoint | Description | Request Format | Response Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `POST` | `/api/contracts/upload` | Upload new contract PDF | `multipart/form-data` (`file`, `vendorName`) | `202 Accepted` |
+| `GET` | `/api/contracts` | List all uploaded contracts | None | `200 OK` |
+| `GET` | `/api/contracts/{id}` | Get contract details by ID | Path variable `id` (UUID) | `200 OK` / `404 Not Found` |
+| `GET` | `/api/contracts/{id}/status` | Check processing status | Path variable `id` (UUID) | `200 OK` / `404 Not Found` |
 
-### Events Table
-
-| Event Payload Class | Direction | Kafka Topic | Trigger / Action |
-| :--- | :--- | :--- | :--- |
-| `ContractUploadedEvent` | Outgoing (Produced) | `contract.uploaded` | Triggered on new file upload. |
-| `PageIndexedEvent` | Incoming (Consumed) | `contract.indexed` | Updates status to `INDEXED`. |
-| `PageIndexedEvent` | Incoming (Consumed) | `contract.analyzed` | Updates status to `ANALYZED`. |
-
----
-
-## REST API Specification
-
-### Base Path: `/api/contracts`
-
-#### 1. Upload Contract Document
-* **Method**: `POST`
-* **Path**: `/api/contracts/upload`
-* **Content-Type**: `multipart/form-data`
-* **Request Parameters**:
-  * `file` (MultipartFile, required): PDF document file.
-  * `vendorName` (String, optional, default: `"Unknown Vendor"`): Name of the vendor.
-* **Response Status**: `202 Accepted`
-* **Response Body** (`ContractResponseDto`):
+### Sample Upload Response Body (`ContractResponseDto`)
 ```json
 {
   "id": "c0a80123-8c76-4d2b-9e12-3a4b5c6d7e8f",
   "fileName": "Master_Services_Agreement.pdf",
   "vendorName": "Acme Corp",
   "status": "UPLOADED",
-  "uploadedAt": "2026-08-04T18:30:00"
-}
-```
-
-#### 2. Get All Contracts
-* **Method**: `GET`
-* **Path**: `/api/contracts`
-* **Response Status**: `200 OK`
-* **Response Body**: Array of `ContractResponseDto`.
-
-#### 3. Get Contract Details by ID
-* **Method**: `GET`
-* **Path**: `/api/contracts/{id}`
-* **Response Status**: `200 OK` / `404 Not Found`
-
-#### 4. Get Contract Status by ID
-* **Method**: `GET`
-* **Path**: `/api/contracts/{id}/status`
-* **Response Status**: `200 OK`
-* **Response Body**:
-```json
-{
-  "status": "ANALYZED"
+  "uploadedAt": "2026-08-20T19:30:00"
 }
 ```
 
 ---
 
-## Configuration & Environment Variables
+## 8. Kafka Events
 
-Key properties in `application.yaml`:
+| Event Topic | Direction | Payload Class | Trigger / Action |
+| :--- | :--- | :--- | :--- |
+| `contract.uploaded` | Produced | `ContractUploadedEvent` | Triggered when contract is uploaded and saved to MinIO. |
+| `contract.indexed` | Consumed | `PageIndexedEvent` | Updates contract entity status to `INDEXED`. |
+| `contract.analyzed` | Consumed | `PageIndexedEvent` | Updates contract entity status to `ANALYZED`. |
+
+---
+
+## 9. Configuration (`application.yaml`)
 
 ```yaml
 server:
@@ -216,26 +196,36 @@ server:
 spring:
   servlet:
     multipart:
+      enabled: true
       max-file-size: 70MB
       max-request-size: 70MB
   datasource:
     url: jdbc:postgresql://localhost:5433/procuremind_db
     username: user
     password: password
+  jpa:
+    hibernate:
+      ddl-auto: validate
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
       group-id: contract-processing-group
+    properties:
+      spring.json.trusted.packages: "com.procuremind.*"
 ```
 
 ---
 
-## Development & Testing
+## 10. How to Run
 
-### Building Service
-```bash
-./mvnw clean package -DskipTests
-```
+### Prerequisites
+1. Ensure PostgreSQL, MinIO, and Kafka containers are active via `docker-compose up -d`.
+2. Install `procuremind-common` library:
+   ```bash
+   cd ../procuremind-common
+   ./mvnw clean install -DskipTests
+   cd ../contract-service
+   ```
 
 ### Running Locally
 ```bash
@@ -243,4 +233,15 @@ spring:
 ```
 
 ### OpenAPI / Swagger UI
-Navigate to `http://localhost:8081/swagger-ui.html` when running locally.
+Navigate to `http://localhost:8081/swagger-ui.html` when running.
+
+---
+
+## 11. Troubleshooting
+
+1. **Upload fails with `MaxUploadSizeExceededException`**:
+   - Ensure the uploaded PDF is within the 70MB limit defined in `spring.servlet.multipart.max-file-size`.
+2. **MinIO Connection Refused**:
+   - If running locally outside Docker, ensure `MinioConfig` points to `http://localhost:9000` (or `http://minio:9000` when inside Docker network).
+3. **Kafka event not received**:
+   - Verify Kafka is reachable at `localhost:9092` and Kafka UI at `http://localhost:8085` displays topic `contract.uploaded`.
