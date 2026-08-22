@@ -1,0 +1,16 @@
+.git
+.github
+.idea
+**/.idea
+**/target
+**/.venv
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+Thumbs.db
+DummyContracts
+docs
+**/*.log
+.mvn/wrapper/maven-wrapper.jar
