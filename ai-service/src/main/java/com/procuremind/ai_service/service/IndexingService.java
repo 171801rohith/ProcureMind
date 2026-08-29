@@ -33,16 +33,24 @@ public class IndexingService {
             return;
         }
 
-        for (PageIndexNode node: unindexedNodes) {
+        int total = unindexedNodes.size();
+        int count = 0;
+        
+        for (PageIndexNode node : unindexedNodes) {
+            count++;
+            log.info("⏳ [{}/{}] Processing node {}...", count, total, node.getId());
+
             try {
-                NodeSummary aiResponse = indexingAgent.summarize((node.getRawContext()));
+                NodeSummary aiResponse = indexingAgent.summarize(node.getRawContext());
 
                 node.setTitle(aiResponse.title());
                 node.setSummary(aiResponse.summary());
 
-                log.debug("Indexed Node {}: {}", node.getId(), aiResponse.title());
+                log.info("✅ [{}/{}] Successfully indexed: \"{}\"", count, total, aiResponse.title());
+                Thread.sleep(3000);
+
             } catch (Exception e) {
-                log.error("Failed to index node {}. Error: {}", node.getId(), e.getMessage());
+                log.error("❌ [{}/{}] Failed node {}: {}", count, total, node.getId(), e.getMessage());
             }
         }
 

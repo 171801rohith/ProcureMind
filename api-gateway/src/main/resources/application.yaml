@@ -10,6 +10,26 @@ spring:
       max-request-size: 70MB
   cloud:
     gateway:
+      # ==========================================
+      # GLOBAL CORS CONFIGURATION
+      # ==========================================
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowed-origins:
+              - "http://localhost:5173"  # Vite React default
+              - "http://localhost:3000"  # Create-React-App default
+            allowed-methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - PATCH
+              - OPTIONS
+            allowed-headers:
+              - "*"
+            allow-credentials: true
+            max-age: 3600
       server:
         webmvc:
           # ==========================================
@@ -43,9 +63,6 @@ spring:
               filters:
                 - SetPath=/actuator/health
 
-# ==========================================
-# GATEWAY'S OWN ACTUATOR HEALTH
-# ==========================================
 management:
   endpoints:
     web:

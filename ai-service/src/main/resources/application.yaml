@@ -42,11 +42,11 @@ spring:
 
   ai:
     openai:
-      base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
-      api-key: ${GEMINI_API_KEY}
+      base-url: ${AI_BASE_URL}
+      api-key: ${AI_API_KEY}
       chat:
         options:
-          model: ${GEMINI_MODEL:gemini-2.0-flash}
+          model: ${AI_MODEL}
           temperature: 0.0
 
 springdoc:
