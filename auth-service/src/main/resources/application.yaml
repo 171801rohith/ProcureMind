@@ -1,0 +1,73 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: auth-service
+
+  datasource:
+    url: ${AUTH_DB_URL:jdbc:postgresql://localhost:5433/procuremind_auth}
+    username: ${AUTH_DB_USERNAME:user}
+    password: ${AUTH_DB_PASSWORD:password}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    show-sql: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  security:
+    oauth2:
+      authorizationserver:
+        # Static, browser-facing issuer. Resource servers reach the JWKS endpoint over
+        # the internal network but validate the `iss` claim against this value
+        # (see docs/AUTH_IMPLEMENTATION_PLAN.md section 13).
+        issuer: ${AUTH_ISSUER_URI:http://localhost:8083}
+
+# Auth-service specific configuration (see docs/AUTH_IMPLEMENTATION_PLAN.md sections 13, 18)
+auth:
+  jwk:
+    # PKCS12 keystore holding the RSA signing key. When unset/absent, a non-persistent
+    # in-memory RSA key with a stable key-id is generated (dev / test only).
+    keystore-path: ${AUTH_JWK_KEYSTORE_PATH:}
+    keystore-password: ${AUTH_JWK_KEYSTORE_PASSWORD:}
+    key-alias: ${AUTH_JWK_KEY_ALIAS:auth-signing}
+    key-password: ${AUTH_JWK_KEY_PASSWORD:}
+    key-id: ${AUTH_JWK_KEY_ID:auth-signing}
+  admin:
+    username: ${AUTH_ADMIN_USERNAME:admin}
+    # No default: when blank, the bootstrap admin user is NOT seeded.
+    password: ${AUTH_ADMIN_PASSWORD:}
+  clients:
+    react:
+      client-id: ${REACT_OIDC_CLIENT_ID:procuremind-react}
+      redirect-uri: ${REACT_OIDC_REDIRECT_URI:http://localhost:5173/}
+      post-logout-redirect-uri: ${REACT_OIDC_POST_LOGOUT_REDIRECT_URI:http://localhost:5173/}
+    streamlit:
+      client-id: ${STREAMLIT_OIDC_CLIENT_ID:procuremind-streamlit}
+      # No default: when blank, the confidential Streamlit client is NOT seeded.
+      client-secret: ${STREAMLIT_OIDC_CLIENT_SECRET:}
+      redirect-uri: ${STREAMLIT_OIDC_REDIRECT_URI:http://localhost:8501/}
+      post-logout-redirect-uri: ${STREAMLIT_OIDC_POST_LOGOUT_REDIRECT_URI:http://localhost:8501/}
+  token:
+    access-token-ttl: ${AUTH_ACCESS_TOKEN_TTL:PT15M}
+    refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:PT8H}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    org.springframework.security: INFO
