@@ -14,6 +14,9 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the auth-service database on a FRESH volume only. For an existing volume run:
+      #   docker compose exec postgres createdb -U user procuremind_auth
+      - ./scripts/init-auth-db.sql:/docker-entrypoint-initdb.d/10-init-auth-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d procuremind_db"]
       interval: 5s
@@ -90,7 +93,8 @@ services:
     container_name: procuremind-contract-service
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      # Loopback-only: the gateway is the ingress. Direct calls still require a valid JWT.
+      - "127.0.0.1:8081:8081"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/procuremind_db
       SPRING_DATASOURCE_USERNAME: user
@@ -99,6 +103,10 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: password
+      # OAuth2 resource server — enforcing. AUTH_ENABLED=false is an emergency kill switch.
+      AUTH_ENABLED: "true"
+      AUTH_ISSUER_URI: http://localhost:8083
+      AUTH_JWK_SET_URI: http://auth-service:8083/oauth2/jwks
     depends_on:
       postgres:
         condition: service_healthy
@@ -114,24 +122,66 @@ services:
     container_name: procuremind-ai-service
     restart: unless-stopped
     ports:
-      - "8082:8082"
+      # Loopback-only: the gateway is the ingress. Direct calls still require a valid JWT.
+      - "127.0.0.1:8082:8082"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/procuremind_db
       SPRING_DATASOURCE_USERNAME: user
       SPRING_DATASOURCE_PASSWORD: password
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      SPRING_AI_OPENAI_BASE_URL: https://generativelanguage.googleapis.com/v1beta/openai/
-      SPRING_AI_OPENAI_API_KEY: ${GEMINI_API_KEY:-}
-      SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      # Local Ollama via its OpenAI-compatible API — matches AI_API_KEY / AI_MODEL in .env.
+      # The base URL uses host.docker.internal (not .env's localhost) so the container can
+      # reach Ollama running on the host; see extra_hosts below.
+      SPRING_AI_OPENAI_BASE_URL: http://host.docker.internal:11434
+      SPRING_AI_OPENAI_API_KEY: ${AI_API_KEY:-ollama}
+      SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL: ${AI_MODEL:-hermes3:8b}
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: password
+      # OAuth2 resource server — enforcing. AUTH_ENABLED=false is an emergency kill switch.
+      AUTH_ENABLED: "true"
+      AUTH_ISSUER_URI: http://localhost:8083
+      AUTH_JWK_SET_URI: http://auth-service:8083/oauth2/jwks
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
       minio:
+        condition: service_healthy
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    container_name: procuremind-auth-service
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/procuremind_auth
+      SPRING_DATASOURCE_USERNAME: user
+      SPRING_DATASOURCE_PASSWORD: password
+      AUTH_ISSUER_URI: http://localhost:8083
+      AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
+      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:-}
+      REACT_OIDC_REDIRECT_URI: ${REACT_OIDC_REDIRECT_URI:-http://localhost:5173/}
+      REACT_OIDC_SILENT_REDIRECT_URI: ${REACT_OIDC_SILENT_REDIRECT_URI:-http://localhost:5173/silent-renew.html}
+      STREAMLIT_OIDC_REDIRECT_URI: ${STREAMLIT_OIDC_REDIRECT_URI:-http://localhost:8501/}
+      STREAMLIT_OIDC_CLIENT_SECRET: ${STREAMLIT_OIDC_CLIENT_SECRET:-}
+      # Persistent token-signing key (optional). Generate it with scripts/gen-auth-keystore.sh,
+      # then uncomment the four vars below and the volume mount. Without a keystore, auth-service
+      # uses a NON-PERSISTENT in-memory RSA key (dev only; tokens do not survive a restart).
+      # AUTH_JWK_KEYSTORE_PATH: /app/keys/auth-signing.p12
+      # AUTH_JWK_KEYSTORE_PASSWORD: ${AUTH_JWK_KEYSTORE_PASSWORD:-changeit}
+      # AUTH_JWK_KEY_ALIAS: ${AUTH_JWK_KEY_ALIAS:-auth-signing}
+      # AUTH_JWK_KEY_ID: ${AUTH_JWK_KEY_ID:-auth-signing}
+    # volumes:
+    #   - ./auth-service/keys/auth-signing.p12:/app/keys/auth-signing.p12:ro
+    depends_on:
+      postgres:
         condition: service_healthy
 
   api-gateway:
@@ -145,10 +195,17 @@ services:
     environment:
       CONTRACT_SERVICE_URL: http://contract-service:8081
       AI_SERVICE_URL: http://ai-service:8082
+      AUTH_SERVICE_URL: http://auth-service:8083
+      # OAuth2 resource server — enforcing. AUTH_ENABLED=false is an emergency kill switch.
+      AUTH_ENABLED: "true"
+      AUTH_ISSUER_URI: http://localhost:8083
+      AUTH_JWK_SET_URI: http://auth-service:8083/oauth2/jwks
     depends_on:
       contract-service:
         condition: service_started
       ai-service:
+        condition: service_started
+      auth-service:
         condition: service_started
 
   # ---------------------------------------------------------------------------
@@ -165,8 +222,45 @@ services:
     environment:
       GATEWAY_URL: http://api-gateway:8080
       API_TIMEOUT: "120"
+      # OIDC login (Phase 6) — confidential Authorization Code + PKCE against auth-service.
+      AUTH_REQUIRED: "${AUTH_REQUIRED:-true}"
+      STREAMLIT_OIDC_BROWSER_ISSUER: http://localhost:8083
+      STREAMLIT_OIDC_INTERNAL_ISSUER: http://auth-service:8083
+      STREAMLIT_OIDC_CLIENT_ID: procuremind-streamlit
+      STREAMLIT_OIDC_CLIENT_SECRET: ${STREAMLIT_OIDC_CLIENT_SECRET:-}
+      STREAMLIT_OIDC_REDIRECT_URI: ${STREAMLIT_OIDC_REDIRECT_URI:-http://localhost:8501/}
     depends_on:
       api-gateway:
+        condition: service_started
+      auth-service:
+        condition: service_started
+
+  procuremind-react:
+    build:
+      context: ./procuremind-react
+      dockerfile: Dockerfile
+      # Vite inlines these into the bundle at build time, so they are build args rather than
+      # environment. They are the URLs the BROWSER uses: the browser runs on the host, so
+      # localhost is correct even though the services are containers. They must also match
+      # the redirect URIs auth-service registers for the procuremind-react client, which is
+      # why the port below is fixed at 5173.
+      args:
+        VITE_GATEWAY_URL: ${VITE_GATEWAY_URL:-http://localhost:8080}
+        VITE_API_TIMEOUT: ${VITE_API_TIMEOUT:-120000}
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-http://localhost:8083}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-procuremind-react}
+        VITE_OIDC_SCOPE: ${VITE_OIDC_SCOPE:-openid profile roles}
+        VITE_AUTH_REQUIRED: ${VITE_AUTH_REQUIRED:-true}
+    container_name: procuremind-react
+    restart: unless-stopped
+    ports:
+      # Must stay 5173: auth-service only accepts redirects to http://localhost:5173/ and
+      # http://localhost:5173/silent-renew.html.
+      - "5173:80"
+    depends_on:
+      api-gateway:
+        condition: service_started
+      auth-service:
         condition: service_started
 
 volumes:

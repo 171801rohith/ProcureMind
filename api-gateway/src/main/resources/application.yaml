@@ -8,6 +8,11 @@ spring:
     multipart:
       max-file-size: 70MB
       max-request-size: 70MB
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${AUTH_JWK_SET_URI:http://localhost:8083/oauth2/jwks}
   cloud:
     gateway:
       # ==========================================
@@ -27,7 +32,10 @@ spring:
               - PATCH
               - OPTIONS
             allowed-headers:
-              - "*"
+              - "Authorization"
+              - "Content-Type"
+              - "Accept"
+              - "X-Requested-With"
             allow-credentials: true
             max-age: 3600
       server:
@@ -45,6 +53,14 @@ spring:
               uri: ${AI_SERVICE_URL:http://localhost:8082}
               predicates:
                 - Path=/api/analysis, /api/analysis/**
+
+            # ADMIN-only user administration, served by auth-service. Routed through the
+            # gateway so the browser keeps a single origin and auth-service needs no extra
+            # CORS surface; auth-service still enforces the ADMIN role independently.
+            - id: auth-service-users-route
+              uri: ${AUTH_SERVICE_URL:http://localhost:8083}
+              predicates:
+                - Path=/api/users, /api/users/**
 
             # ==========================================
             # DOWNSTREAM HEALTH CHECK ROUTING
@@ -70,7 +86,14 @@ management:
         include: health, info
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
+
+# Resource-server enforcement. Enforcing by default (Phase 7/8); AUTH_ENABLED=false is a
+# documented emergency kill switch. See docs/AUTH_IMPLEMENTATION_PLAN.md sections 7 & 12.
+app:
+  security:
+    enforce: ${AUTH_ENABLED:true}
+    issuer-uri: ${AUTH_ISSUER_URI:http://localhost:8083}
 
 logging:
   level:

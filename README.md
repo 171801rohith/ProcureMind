@@ -1,6 +1,6 @@
 # ProcureMind — AI-Native Procurement Contract Analysis Platform
 
-**ProcureMind** is an enterprise-grade, event-driven microservices platform engineered to automate legal contract ingestion, hierarchical document indexing, vendor compliance tracking, and AI-powered risk scoring. Built on **Spring Boot 4.0.7**, **Spring AI 1.1.0**, **Spring Cloud Gateway WebMVC**, **Apache Kafka**, **MinIO Object Storage**, **PostgreSQL**, and **Google Gemini API (Gemini 2.5 Flash)**, ProcureMind turns raw procurement PDFs into structured, actionable intelligence.
+**ProcureMind** is an enterprise-grade, event-driven microservices platform engineered to automate legal contract ingestion, hierarchical document indexing, vendor compliance tracking, and AI-powered risk scoring. Built on **Spring Boot 4.0.7**, **Spring AI 1.1.0**, **Spring Cloud Gateway WebMVC**, **Apache Kafka**, **MinIO Object Storage**, **PostgreSQL**, and **a local Ollama server (OpenAI-compatible API)**, ProcureMind turns raw procurement PDFs into structured, actionable intelligence.
 
 ---
 
@@ -34,7 +34,7 @@ flowchart TB
     end
 
     subgraph AI Engine
-        GEMINI["Google Gemini API\ngemini-2.5-flash [Cloud LLM]"]
+        OLLAMA["Ollama (local)\nOpenAI-compatible API [Port 11434]"]
     end
 
     UI -->|HTTP / JSON| GW
@@ -51,7 +51,7 @@ flowchart TB
     KAFKA -->|Consume contract.uploaded| AI
     AI -->|Read PDF Stream| MINIO
     AI -->|Persist Nodes & Risk Models| PG
-    AI -->|Prompt / Agent Function Call| GEMINI
+    AI -->|Prompt / Agent Function Call| OLLAMA
     AI -->|Publish contract.indexed| KAFKA
     AI -->|Publish contract.analyzed| KAFKA
 
@@ -123,7 +123,7 @@ sequenceDiagram
 | **[api-gateway](api-gateway/README.md)** | Java 21, Spring Boot 4.0.7, Spring Cloud Gateway WebMVC | Single entry-point reverse proxy routing inbound HTTP requests to downstream microservices and proxying Actuator health checks. |
 | **[procuremind-common](procuremind-common/README.md)** | Java 21 | Shared record-based DTOs and Kafka event contracts (`ContractUploadedEvent`, `PageIndexedEvent`). |
 | **[contract-service](contract-service/README.md)** | Java 21, Spring Boot 4.0.7, JPA, MinIO SDK, Kafka | Bounded context owning contract upload, file persistence to MinIO, contract metadata status lifecycle, and state propagation. |
-| **[ai-service](ai-service/README.md)** | Java 21, Spring Boot 4.0.7, Spring AI, Apache Tika, Google Gemini | Bounded context for PDF parsing, hierarchical section indexing (`IndexingAgent`), LLM tool-calling analysis (`AnalysisAgent`), conversational assistant (`ChatAgent`), risk scoring, and analytical queries. |
+| **[ai-service](ai-service/README.md)** | Java 21, Spring Boot 3.5.14, Spring AI, Apache Tika, Ollama | Bounded context for PDF parsing, hierarchical section indexing (`IndexingAgent`), LLM tool-calling analysis (`AnalysisAgent`), conversational assistant (`ChatAgent`), risk scoring, and analytical queries. |
 | **[procuremind-ui](procuremind-ui/README.md)** | Python 3.13, Streamlit, Pandas, Plotly | Front-end web dashboard aggregating CQRS read models across `contract-service` and `ai-service` via `api-gateway`. |
 | **[DummyContracts](DummyContracts/README.md)** | PDF Agreements, JSON Datasets | Sample legal contracts and exported database test fixtures for seeding and offline verification. |
 
@@ -177,16 +177,16 @@ Communication across microservices is non-blocking and mediated by Kafka topics:
 * **Maven 3.9+** (or included `mvnw` wrappers)
 * **Python 3.13+** (with `uv` or `pip`)
 * **Docker Desktop**
-* **Google Gemini API Key** (from [Google AI Studio](https://aistudio.google.com/))
+* **[Ollama](https://ollama.com/)** running locally, with the model pulled: `ollama pull hermes3:8b`
 
 ### Option A: Run Complete Stack with Docker Compose (Recommended)
 
 From the project root:
 
 ```bash
-# 1. Configure your Gemini API key
+# 1. Configure the AI provider
 cp .env.example .env
-# Edit .env and set GEMINI_API_KEY=your_key_here
+# The defaults point at a local Ollama; adjust AI_BASE_URL / AI_MODEL if yours differs
 
 # 2. Build and launch all infrastructure, microservices, and UI containers
 docker compose up --build -d
@@ -217,8 +217,8 @@ If developing microservices locally with IDEs while running infrastructure in Do
 #### Step 1: Start Infrastructure Containers Only
 
 ```bash
-docker compose up postgres minio kafka ollama kafka-ui -d
-docker exec -it procuremind-ollama ollama pull qwen2.5:7b
+docker compose up postgres minio kafka kafka-ui -d
+ollama pull hermes3:8b   # Ollama runs on the host, not in Compose
 ```
 
 #### Step 2: Build Monorepo Dependencies
@@ -274,7 +274,7 @@ All Spring Boot microservices expose Spring Boot Actuator endpoints routed throu
 
 ```
 ProcureMind/
-├── docker-compose.yaml           # Infrastructure setup (Postgres, MinIO, Kafka, Ollama, Kafka-UI)
+├── docker-compose.yaml           # Infrastructure setup (Postgres, MinIO, Kafka, Kafka-UI)
 ├── pom.xml                       # Parent Maven POM
 ├── README.md                     # Root Architecture & System Documentation
 ├── docs/                         # Consolidated Architecture & Diagrams

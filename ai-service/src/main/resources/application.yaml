@@ -40,6 +40,18 @@ spring:
     baseline-on-migrate: true
     locations: classpath:db/migration
 
+  # OAuth2 Resource Server. The JWKS URL differs by how the service is run, so the value
+  # lives in AUTH_JWK_SET_URI and the default here is the host/IDE one:
+  #   - docker compose sets AUTH_JWK_SET_URI=http://auth-service:8083/oauth2/jwks (service DNS)
+  #   - a plain `mvn spring-boot:run` or an IDE run uses this localhost default
+  # The issuer is deliberately NOT derived from this URL: app.security.issuer-uri stays the
+  # static browser-facing issuer in both modes, so the `iss` claim is validated identically.
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${AUTH_JWK_SET_URI:http://localhost:8083/oauth2/jwks}
+
   ai:
     openai:
       base-url: ${AI_BASE_URL}
@@ -62,7 +74,39 @@ management:
         include: health, info
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
+
+# Resource-server enforcement toggle. See docs/AUTH_IMPLEMENTATION_PLAN.md sections 9 & 13.
+app:
+  # Bounds the LLM indexing loop that runs on the Kafka consumer thread.
+  # Invariant: max-duration x (1 + Kafka retries) must stay below the consumer's
+  # max.poll.interval.ms (30m above), or the broker evicts us mid-contract.
+  indexing:
+    max-duration: ${INDEXING_MAX_DURATION:8m}
+    inter-call-delay: ${INDEXING_INTER_CALL_DELAY:0ms}
+    # Upper bound on the text summarised for one node. A document whose headings do not match
+    # the parser patterns collapses into a single node holding everything, which overflows the
+    # model context and yields a useless summary.
+    max-node-chars: ${INDEXING_MAX_NODE_CHARS:12000}
+  analysis:
+    # Section index shown to the screening model per batch. Batch count is
+    # ceil(total index characters / this), so it sets how many model calls a contract costs.
+    screening-batch-chars: ${ANALYSIS_SCREENING_BATCH_CHARS:4000}
+    # Ceiling on the evidence text handed to the tool-free analysis call.
+    max-evidence-chars: ${ANALYSIS_MAX_EVIDENCE_CHARS:16000}
+    # How many flagged sections are read in full, and how much of each.
+    max-verified-sections: ${ANALYSIS_MAX_VERIFIED_SECTIONS:8}
+    max-verified-section-chars: ${ANALYSIS_MAX_VERIFIED_SECTION_CHARS:4000}
+    # Wall-clock ceiling for screening. This times the Kafka retry count must stay under the
+    # consumer's max.poll.interval.ms (30m above). Raise it for very large documents.
+    max-duration: ${ANALYSIS_MAX_DURATION:8m}
+  retrieval:
+    # Upper bound on a single tool response handed to the analysis model. Exceeding the model
+    # context window makes the completion come back empty, which is how analysis was failing.
+    max-tool-response-chars: ${RETRIEVAL_MAX_TOOL_RESPONSE_CHARS:12000}
+  security:
+    enforce: ${AUTH_ENABLED:true}
+    issuer-uri: ${AUTH_ISSUER_URI:http://localhost:8083}
 
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

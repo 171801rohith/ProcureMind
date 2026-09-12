@@ -10,6 +10,8 @@ from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
 
+import auth as oidc_auth
+
 # --- 1. ENVIRONMENT CONFIGURATION & SETUP ---
 load_dotenv()
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8080")
@@ -175,7 +177,9 @@ if "chat_history" not in st.session_state:
 def safe_get_api(endpoint: str):
     url = f"{GATEWAY_URL}{endpoint}"
     try:
-        res = requests.get(url, timeout=API_TIMEOUT)
+        res = requests.get(url, headers=oidc_auth.auth_headers(), timeout=API_TIMEOUT)
+        if res.status_code == 401 and oidc_auth.refresh_or_relogin():
+            res = requests.get(url, headers=oidc_auth.auth_headers(), timeout=API_TIMEOUT)
         if res.status_code == 200:
             return res.json()
     except Exception as e:
@@ -232,7 +236,11 @@ def upload_contract_api(file, vendor_name: str, contract_type: str, amount: floa
         "amount": str(amount)
     }
     try:
-        res = requests.post(url, files=files, data=data, timeout=API_TIMEOUT)
+        res = requests.post(url, files=files, data=data, headers=oidc_auth.auth_headers(), timeout=API_TIMEOUT)
+        if res.status_code == 401 and oidc_auth.refresh_or_relogin():
+            file.seek(0) if hasattr(file, "seek") else None
+            files = {"file": (file.name, file.getvalue() if hasattr(file, "getvalue") else file, "application/pdf")}
+            res = requests.post(url, files=files, data=data, headers=oidc_auth.auth_headers(), timeout=API_TIMEOUT)
         if res.status_code in [200, 201, 202]:
             try:
                 return res.json()
@@ -252,7 +260,9 @@ def send_chat_api(user_message: str, conversation_id: str):
     url = f"{GATEWAY_URL}/api/analysis/chat"
     payload = {"userMessage": user_message, "conversationId": conversation_id}
     try:
-        res = requests.post(url, json=payload, timeout=API_TIMEOUT)
+        res = requests.post(url, json=payload, headers=oidc_auth.auth_headers(), timeout=API_TIMEOUT)
+        if res.status_code == 401 and oidc_auth.refresh_or_relogin():
+            res = requests.post(url, json=payload, headers=oidc_auth.auth_headers(), timeout=API_TIMEOUT)
         if res.status_code == 200:
             return res.json()
         else:
@@ -304,21 +314,24 @@ def render_header():
         st.markdown(f"<div style='text-align:right; font-size:0.8rem; color:#94a3b8; margin-top:8px;'>Gateway: <code>{GATEWAY_URL}</code></div>", unsafe_allow_html=True)
     
     with col3:
-        if st.button("➕ Upload Contract", type="primary", use_container_width=True):
+        if oidc_auth.can_write() and st.button("➕ Upload Contract", type="primary", use_container_width=True):
             st.session_state.show_upload_modal = True
 
 def render_sidebar():
     with st.sidebar:
         st.markdown("### 📌 Navigation")
+        modules = [
+            "📊 BI Dashboard",
+            "🔍 Document Intelligence",
+            "🏢 Vendors Portfolio",
+        ]
+        # Ingestion and the assistant are ANALYST/ADMIN only (plan section 12).
+        if oidc_auth.can_write():
+            modules += ["📤 Ingestion Pipeline", "🤖 ProcureMind AI Assistant"]
+
         selected_tab = st.radio(
             "Select Module",
-            [
-                "📊 BI Dashboard",
-                "🔍 Document Intelligence",
-                "🏢 Vendors Portfolio",
-                "📤 Ingestion Pipeline",
-                "🤖 ProcureMind AI Assistant"
-            ],
+            modules,
             index=0
         )
         st.markdown("---")
@@ -326,9 +339,17 @@ def render_sidebar():
         st.markdown("#### ⚙️ System Status")
         st.markdown(f"🟢 **API Gateway:** `{GATEWAY_URL}`")
         st.markdown(f"⏳ **Timeout:** `{API_TIMEOUT}s`")
+
+        _user = oidc_auth.current_user()
+        if _user:
+            st.markdown("---")
+            st.markdown(f"👤 **{_user.get('preferred_username') or _user.get('name') or _user.get('sub')}**")
+            if st.button("Sign out", use_container_width=True):
+                oidc_auth.logout()
+
         st.markdown("---")
         st.caption(f"Session UUID:\n`{st.session_state.conversation_id}`")
-        
+
         return selected_tab
 
 # --- 7. UPLOAD MODAL COMPONENT (FR-2) ---
@@ -706,7 +727,7 @@ def render_agentic_chat_page():
             <div>
                 <h4 style="margin:0; color:#f8fafc;">Conversational Contract Intelligence Agent</h4>
                 <p style="margin:4px 0 0 0; font-size:0.83rem; color:#94a3b8;">
-                    Connected to Backend Gateway <code>{GATEWAY_URL}</code> | Model: Agentic Vector RAG
+                    Connected to Backend Gateway <code>{GATEWAY_URL}</code> | Retrieval: Agentic hierarchical clause retrieval
                 </p>
             </div>
             <div style="text-align:right;">
@@ -802,6 +823,9 @@ def render_agentic_chat_page():
 
 # --- 12. MAIN APP ROUTER ---
 def main():
+    oidc_auth.handle_callback()
+    oidc_auth.require_login()
+
     render_header()
     st.markdown("---")
     
@@ -815,9 +839,9 @@ def main():
         render_document_intelligence(df)
     elif selected_tab == "🏢 Vendors Portfolio":
         render_vendors_portfolio(df)
-    elif selected_tab == "📤 Ingestion Pipeline":
+    elif selected_tab == "📤 Ingestion Pipeline" and oidc_auth.can_write():
         render_upload_modal()
-    elif selected_tab == "🤖 ProcureMind AI Assistant":
+    elif selected_tab == "🤖 ProcureMind AI Assistant" and oidc_auth.can_write():
         render_agentic_chat_page()
 
 if __name__ == "__main__":

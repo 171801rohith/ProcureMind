@@ -6,7 +6,7 @@ This document serves as the comprehensive architectural specification for **Proc
 
 ## 1. System Overview & Architectural Paradigm
 
-ProcureMind automates the ingestion, hierarchical semantic indexing, compliance tracking, and risk scoring of corporate legal contracts (e.g., Master Services Agreements, Statements of Work, NDAs, Terms & Conditions).
+ProcureMind automates the ingestion, hierarchical structure-aware indexing, compliance tracking, and risk scoring of corporate legal contracts (e.g., Master Services Agreements, Statements of Work, NDAs, Terms & Conditions).
 
 The platform is designed around four core architectural principles:
 1. **Domain-Driven Design (DDD)**: Strict isolation between contract lifecycle management and AI compute pipelines.
@@ -41,7 +41,7 @@ flowchart TB
     end
 
     subgraph AI Inference Runtime
-        GEMINI["Google Gemini API\ngemini-2.5-flash [Cloud LLM]"]
+        OLLAMA["Ollama (local)\nOpenAI-compatible API [Port 11434]"]
     end
 
     UI -->|HTTP / JSON| GW
@@ -60,7 +60,7 @@ flowchart TB
     KAFKA -->|Consume contract.uploaded| AI
     AI -->|Read PDF Stream| MINIO
     AI -->|Persist Document Nodes & Risks| PG
-    AI -->|Prompt / Function Calling| GEMINI
+    AI -->|Prompt / Function Calling| OLLAMA
     AI -->|Publish contract.indexed| KAFKA
     AI -->|Publish contract.analyzed| KAFKA
 
@@ -261,7 +261,7 @@ erDiagram
    - `level 2`: `ARTICLE` (Major article/clause heading).
    - `level 3+`: `SECTION` (Numbered sub-clauses, e.g., `2.1`, `3.4.1`).
    - `raw_context`: Exact legal text parsed from the PDF.
-   - `title` & `summary`: AI-generated semantic metadata.
+   - `title` & `summary`: AI-generated summaries of the section text.
 3. **`contract_analysis`**: Managed by `ai-service`. Stores overall risk score (1.0 to 10.0), executive recommendation, and processing status.
 4. **`contract_metadata`**: Extracted contract categorization (e.g., `MSA`, `SOW`, `NDA`) and total monetary commitment amount ($).
 5. **`analysis_risks`**: Individual flagged risk entries with severity levels (`HIGH`, `MEDIUM`, `LOW`) and descriptions.
@@ -270,7 +270,7 @@ erDiagram
 
 ## 6. AI Subsystem & Agent Architecture
 
-The AI intelligence subsystem in `ai-service` is built on **Spring AI 1.1.0** and communicates with **Google Gemini API** (`gemini-2.5-flash` / `gemini-1.5-flash`) via Spring AI's OpenAI-compatible model starter with temperature `0.0`.
+The AI intelligence subsystem in `ai-service` is built on **Spring AI 1.1.0** and communicates with a **local Ollama server** (`hermes3:8b` by default) via Spring AI's OpenAI-compatible model starter with temperature `0.0`.
 
 ```mermaid
 flowchart TD
@@ -298,10 +298,10 @@ flowchart TD
         CT --> RET
     end
 
-    GEMINI["Google Gemini API\n(gemini-2.5-flash)\n[Cloud LLM]"]
-    IA <--> GEMINI
-    AA <--> GEMINI
-    CA <--> GEMINI
+    OLLAMA["Ollama (local)\n(hermes3:8b)\n[Port 11434]"]
+    IA <--> OLLAMA
+    AA <--> OLLAMA
+    CA <--> OLLAMA
 ```
 
 ### 1. `IndexingAgent`
@@ -328,6 +328,33 @@ flowchart TD
 
 ---
 
+### 6.1 Retrieval model — structure-aware, not vector-based
+
+There is no vector store, no embedding model and no similarity search anywhere in this
+system, and none is planned. Earlier wording in this repository described the retrieval
+layer as "Vectorless RAG" or "Agentic Vector RAG"; both were misleading and have been
+replaced by **hierarchical, structure-aware retrieval**.
+
+What actually happens is:
+
+1. `PdfParsingService` turns the extracted text into a tree of `page_index_nodes` using the
+   document's own numbering (`ARTICLE ...` at level 2, dotted `1.2.3` sections deeper).
+2. `IndexingService` gives every node an LLM-written title and one- or two-sentence summary.
+3. `RetrievalService` exposes two deterministic JPA lookups to the model as tools:
+   `getContractSummary(documentId)` returns the whole table of contents, and
+   `getClauseContent(nodeId)` returns one node's raw text.
+4. The model reads the table of contents, chooses the node identifiers it needs, and asks
+   for exactly those clauses.
+
+Selection is therefore done by the model over an explicit structure, not by cosine
+similarity over an opaque index. For contracts this is a real advantage rather than a
+shortcut: retrieval is exact and auditable (a citation is a node id, not a chunk offset),
+clause boundaries are respected rather than cut at an arbitrary token count, and there is no
+index to rebuild or keep in sync. The cost is that the whole table of contents goes into the
+prompt, so the approach is bounded by context window rather than by corpus size. A vector
+index would only become necessary for cross-contract search over a corpus too large to
+enumerate, which is not a use case this system has.
+
 ## 7. Edge Gateway & Network Routing
 
 The **API Gateway** (`api-gateway`) is a Spring Cloud Gateway WebMVC reverse proxy exposing port `8080`.
@@ -350,3 +377,28 @@ The **API Gateway** (`api-gateway`) is a Spring Cloud Gateway WebMVC reverse pro
 2. **MinIO Auto-Provisioning**: `StorageService` verifies bucket existence and provisions `procuremind-contracts` on startup if absent.
 3. **Resilient Parsing**: `PdfParsingService` cleans noise headers and page numbers using regex matching, handling non-standard PDF formats cleanly.
 4. **Database Migration Safety**: Schema tables and unique constraints (`uc_contract_analysis_contractid`, `uc_contract_metadata_contractid`) are managed via version-controlled Flyway scripts (`V1__init_schema.sql`).
+5. **Resumable Indexing**: `IndexingService` commits each node's summary as it is produced and works under a wall-clock budget (`app.indexing.max-duration`). A timeout or redelivery resumes from the nodes that still have a null summary instead of restarting the contract, and the budget keeps the consumer thread inside the broker's `max.poll.interval.ms`.
+6. **Retry and Dead-Lettering**: Listeners propagate exceptions rather than swallowing them, so `KafkaErrorHandlingConfig`'s `DefaultErrorHandler` applies three attempts with a five-second backoff and then routes the record to `<topic>.DLT`. The same recoverer publishes `contract.failed`, which moves the contract to `FAILED` so a stuck document is visible rather than pinned at `UPLOADED` forever.
+7. **Monotonic Status**: `ContractEventListener.shouldAdvance` only ever moves a contract forward through `UPLOADED -> INDEXED -> ANALYZED`, and treats `FAILED` as terminal. A redelivered `contract.indexed` cannot drag an already-analysed contract backwards.
+8. **After-Commit Publishing**: Both `ContractEventProducer`s defer the Kafka send to `afterCommit` when a transaction is active, and log the send future's outcome. A rolled-back write therefore publishes nothing, and a failed publish is no longer silent.
+
+### 8.1 Known gap: no transactional outbox
+
+After-commit publishing closes one direction of the dual write (an event for a row that was
+never committed) but not the other. If the database commits and the broker is then
+unreachable, the event is lost: the contract stays at `UPLOADED` or `INDEXED` and nothing
+retries, because the failure happens after the listener has already returned.
+
+Closing that gap properly means a **transactional outbox**: each producer writes the event
+into an `outbox_events` table inside the same transaction as the state change, and a
+separate relay (a scheduled poller, or Debezium reading the write-ahead log) publishes rows
+from that table to Kafka and marks them sent. Consumers already tolerate duplicates through
+their `existsBy...` guards and the monotonic status rule, so at-least-once relay delivery is
+safe here.
+
+This is deliberately **not implemented yet**. It adds a table, a migration, a relay
+component and its own failure modes to two services, and the current exposure is narrow: a
+single-broker local deployment where a post-commit broker outage is both rare and
+recoverable by replaying the upload. It is recorded here as the next reliability item rather
+than half-built. The producer classes point at this section so the gap stays visible at the
+code that causes it.

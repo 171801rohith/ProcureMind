@@ -223,7 +223,7 @@ public class GatewayWelcomeController {
                             <span class="card-title">🤖 AI Service & Analytics</span>
                             <span>🧠</span>
                         </div>
-                        <p class="card-desc">Clause extraction, risk scoring, financial exposure calculations, and vector retrieval.</p>
+                        <p class="card-desc">Clause extraction, risk scoring, financial exposure calculations, and hierarchical clause retrieval.</p>
                         <span class="route-tag">/api/analysis/**</span>
                     </a>
 

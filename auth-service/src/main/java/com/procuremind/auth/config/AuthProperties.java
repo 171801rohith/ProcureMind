@@ -58,6 +58,13 @@ public class AuthProperties {
         /** Only set for the confidential (Streamlit) client. Blank -> public client. */
         private String clientSecret = "";
         private String redirectUri = "";
+        /**
+         * Redirect target for the hidden silent-renew iframe. Spring Authorization Server
+         * refuses any redirect_uri that is not registered, so this has to be seeded
+         * alongside the main one or prompt=none renewal fails with invalid_request.
+         * Blank means the client does not use silent renew.
+         */
+        private String silentRedirectUri = "";
         private String postLogoutRedirectUri = "";
 
     }

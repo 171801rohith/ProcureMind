@@ -23,7 +23,7 @@ public class ChatTools {
         return retrievalService.getCachedAnalysis(contractId);
     }
 
-    @Tool(description = "Retrieves the semantic Table of Contents. Use THIRD if the cached analysis does not answer the user's specific question.")
+    @Tool(description = "Retrieves the document's hierarchical Table of Contents (section order, titles, summaries). Use THIRD if the cached analysis does not answer the user's specific question.")
     public String getContractSummary(String contractId) {
         return retrievalService.getContractSummary(contractId);
     }

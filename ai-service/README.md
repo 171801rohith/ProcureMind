@@ -1,6 +1,6 @@
 # ProcureMind — AI Service (`ai-service`)
 
-The **AI Service** is the intelligence engine of the **ProcureMind** microservices ecosystem. Operating on port `8082`, it leverages **Spring Boot 4.0.7**, **Spring AI 1.1.0**, **Apache Tika 3.2.2**, **MinIO**, **PostgreSQL**, and cloud LLM inference via **Google Gemini API (Gemini 2.5 Flash)** to transform unstructured contract PDFs into hierarchical index trees, structured metadata, multi-factor risk assessments, and interactive conversational intelligence.
+The **AI Service** is the intelligence engine of the **ProcureMind** microservices ecosystem. Operating on port `8082`, it leverages **Spring Boot 3.5.14**, **Spring AI 1.1.0**, **Apache Tika 3.2.2**, **MinIO**, **PostgreSQL**, and local LLM inference via **Ollama** (OpenAI-compatible API) to transform unstructured contract PDFs into hierarchical index trees, structured metadata, multi-factor risk assessments, and interactive conversational intelligence.
 
 ---
 
@@ -23,7 +23,7 @@ flowchart TB
     subgraph AI Agents & Indexing
         IDX_SVC["IndexingService"]
         IDX_AGENT["IndexingAgent\n(Spring AI ChatClient)"]
-        GEMINI["Google Gemini API\ngemini-2.5-flash [Cloud LLM]"]
+        OLLAMA["Ollama (local)\nOpenAI-compatible API [Port 11434]"]
     end
 
     subgraph Risk Analysis Engine
@@ -51,7 +51,7 @@ flowchart TB
 
     LISTEN -->|4. Trigger Node Indexing| IDX_SVC
     IDX_SVC -->|5. Summarize Section Nodes| IDX_AGENT
-    IDX_AGENT -->|6. Prompt LLM| GEMINI
+    IDX_AGENT -->|6. Prompt LLM| OLLAMA
     IDX_SVC -->|7. Persist Titles & Summaries| DB
     IDX_SVC -->|8. Publish contract.indexed| KAFKA
 
@@ -61,7 +61,7 @@ flowchart TB
     ANA_AGENT -->|12. Function Calls| TOOLS
     TOOLS -->|13. Retrieve TOC / Text| RETRIEVAL
     RETRIEVAL -->|Query Nodes| DB
-    ANA_AGENT -->|14. Synthesize Risk JSON| GEMINI
+    ANA_AGENT -->|14. Synthesize Risk JSON| OLLAMA
     ANA_SVC -->|15. Save Analysis & Risks| DB
     ANA_SVC -->|16. Publish contract.analyzed| KAFKA
 
@@ -69,7 +69,7 @@ flowchart TB
     CONV_SVC --> CHAT_AGENT
     CHAT_AGENT <--> CHAT_TOOLS
     CHAT_TOOLS --> RETRIEVAL
-    CHAT_AGENT <--> GEMINI
+    CHAT_AGENT <--> OLLAMA
 ```
 
 ---
@@ -146,7 +146,7 @@ ai-service/
 ```
 1. [Input]: Kafka event "contract.uploaded" received with contractId and MinIO object key.
 2. [Parsing]: PdfParsingService streams the PDF from MinIO, extracts raw text via Apache Tika, and splits content into a hierarchical tree (ROOT, ARTICLE, SECTION) using regex pattern matching.
-3. [Indexing]: IndexingService iterates over unindexed nodes; IndexingAgent calls Ollama (Qwen2.5 7B) to generate concise titles and summaries, then publishes "contract.indexed".
+3. [Indexing]: IndexingService iterates over unindexed nodes; IndexingAgent calls Ollama (hermes3:8b by default) to generate concise titles and summaries, then publishes "contract.indexed".
 4. [Analysis]: AnalysisService triggers AnalysisAgent which uses Spring AI Function Calling (ContractAnalysisTools) to inspect the Table of Contents, reads specific high-risk clauses, and synthesizes a risk score (1-10) and identified risks, then publishes "contract.analyzed".
 5. [Conversation]: When users interact with the chat assistant, ChatController routes the request through ConversationService and ChatAgent, utilizing ChatTools to query pre-computed analyses and raw clauses.
 6. [Output]: REST API endpoints serve CQRS read models to the UI.
@@ -185,7 +185,7 @@ ai-service/
 - Equipped with four tools:
   - `discoverContracts`: Discovers contracts matching metadata criteria.
   - `getCachedAnalysis`: Returns pre-computed risk score and identified risks instantly.
-  - `getContractSummary`: Retrieves the semantic Table of Contents.
+  - `getContractSummary`: Retrieves the document's hierarchical Table of Contents (section order, titles, summaries).
   - `getClauseContent`: Fetches exact legal text for deep evidence retrieval.
 
 ### 6. `RetrievalService` (`service/RetrievalService.java`)
@@ -201,14 +201,14 @@ ai-service/
 - **Internal**:
   - `com.procuremind:procuremind-common`: Shared event DTOs (`ContractUploadedEvent`, `PageIndexedEvent`).
 - **External Frameworks**:
-  - **Spring Boot 4.0.7**: Core application framework.
+  - **Spring Boot 3.5.14**: Core application framework.
   - **Spring AI 1.1.0**: ChatClient, function calling annotations (`@Tool`), and output converters.
   - **Apache Tika 3.2.2**: Text extraction engine for PDF binaries.
   - **Spring Data JPA & Hibernate**: Relational persistence.
   - **Flyway**: Database schema migration.
   - **MinIO Java SDK 8.5.17**: Object storage client.
   - **Spring Kafka**: Event messaging.
-  - **Ollama**: Local LLM inference server running `qwen2.5:7b`.
+  - **Ollama**: Local LLM inference server; model from `AI_MODEL` (default `hermes3:8b`).
 
 ---
 
@@ -311,13 +311,15 @@ spring:
     properties:
       spring.json.trusted.packages: "com.procuremind.*"
   ai:
-    ollama:
-      base-url: http://localhost:11434
+    # Ollama is reached through its OpenAI-compatible API, so the OpenAI starter is used
+    # rather than the Ollama starter. AI_BASE_URL / AI_API_KEY / AI_MODEL have no defaults.
+    openai:
+      base-url: ${AI_BASE_URL}
+      api-key: ${AI_API_KEY}
       chat:
         options:
-          model: qwen2.5:7b
+          model: ${AI_MODEL}
           temperature: 0.0
-          num-ctx: 8192
 ```
 
 ---
@@ -327,7 +329,7 @@ spring:
 ### Prerequisites
 1. Ensure Ollama is running and model is downloaded:
    ```bash
-   docker exec -it procuremind-ollama ollama pull qwen2.5:7b
+   ollama pull hermes3:8b
    ```
 2. Ensure infrastructure containers (PostgreSQL, MinIO, Kafka) are active.
 3. Install `procuremind-common` library:

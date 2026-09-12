@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ProcureMind renewing session</title>
+</head>
+<body>
+<!--
+  Target of the hidden silent-renew iframe.
+
+  Spring Authorization Server does not issue refresh tokens to public clients, so the SPA
+  renews its access token with a prompt=none Authorization Code + PKCE request instead. The
+  iframe lands here, and signinSilentCallback hands the result back to the parent window.
+
+  This page exists because oidc-client-ts defaults silent_redirect_uri to redirect_uri: the
+  whole application would otherwise boot inside the iframe and never post the result back,
+  so every renewal silently timed out.
+-->
+<script type="module" src="/src/auth/silentRenew.js"></script>
+</body>
+</html>

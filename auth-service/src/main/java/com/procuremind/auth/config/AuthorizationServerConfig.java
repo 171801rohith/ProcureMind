@@ -1,5 +1,6 @@
 package com.procuremind.auth.config;
 
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -108,7 +109,16 @@ public class AuthorizationServerConfig {
                     roles.add(value.substring("ROLE_".length()));
                 }
             }
-            context.getClaims().claim("roles", roles);
+            // Deliberately an ArrayList rather than the TreeSet above.
+            //
+            // These claims are persisted with the authorization in oidc_id_token_metadata and
+            // read back by JdbcOAuth2AuthorizationService, whose Jackson mapper only trusts
+            // the types on Spring Security's allow-list. TreeSet is not on it, so RP-initiated
+            // logout failed with "Could not resolve type id 'java.util.TreeSet'", returned 400,
+            // and left the authorization-server session alive. The TreeSet still does the
+            // de-duplication and ordering; only the stored type changes, so the JSON claim is
+            // unchanged.
+            context.getClaims().claim("roles", new ArrayList<>(roles));
         };
     }
 }

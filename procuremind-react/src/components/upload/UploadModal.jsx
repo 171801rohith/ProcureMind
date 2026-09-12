@@ -35,7 +35,7 @@ export function UploadModal() {
       const cid = res?.id || res?.contractId;
 
       setProgress(66);
-      setStatusMessage('Indexing vector embeddings & clause analysis...');
+      setStatusMessage('Building the clause hierarchy & summarising sections...');
       await new Promise((r) => setTimeout(r, 1000));
 
       if (cid) {

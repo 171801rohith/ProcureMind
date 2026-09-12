@@ -2,12 +2,37 @@
   ProcureMind Strict API Client
   - Connects to API Gateway via Vite Proxy or direct VITE_GATEWAY_URL.
   - Fixes CORS issues when fetching from http://localhost:5173.
+  - Phase 5: attaches `Authorization: Bearer <access_token>` to every request and,
+    on a 401, attempts one silent refresh + retry before giving up. No X-User-* headers.
 */
 
 const GATEWAY_URL = import.meta.env.VITE_GATEWAY_URL !== undefined ? import.meta.env.VITE_GATEWAY_URL : '';
 const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT || '120000', 10);
 
-async function apiFetch(url, options = {}) {
+// --- Auth wiring (populated by AppContext once the OIDC user is available) ---------------
+let accessToken = null;
+let onAuthExpired = null;
+
+/** Set/clear the bearer token used for outgoing API calls. */
+export function setAccessToken(token) {
+  accessToken = token || null;
+}
+
+/**
+ * Register the "token expired" handler.
+ * @param {() => Promise<boolean>} fn resolves true when a fresh access token is available
+ *   (already pushed via setAccessToken), false when the user must re-authenticate
+ *   (fn is expected to trigger the sign-in redirect itself).
+ */
+export function setOnAuthExpired(fn) {
+  onAuthExpired = fn;
+}
+
+function authHeader() {
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
+
+async function apiFetch(url, options = {}, allowReauth = true) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
 
@@ -17,21 +42,57 @@ async function apiFetch(url, options = {}) {
       signal: controller.signal,
       headers: {
         'Accept': 'application/json',
+        ...authHeader(),
         ...(options.headers || {}),
       },
     });
     clearTimeout(timeoutId);
 
+    if (response.status === 401 && allowReauth && onAuthExpired) {
+      const refreshed = await onAuthExpired();
+      if (refreshed) {
+        return apiFetch(url, options, false);
+      }
+      return null;
+    }
+
     if (response.ok) {
       return await response.json();
-    } else {
-      console.warn(`API returned HTTP ${response.status} for ${url}`);
     }
+    console.warn(`API returned HTTP ${response.status} for ${url}`);
   } catch (err) {
     console.error(`API Fetch Error for ${url}:`, err);
   }
 
   return null;
+}
+
+async function authedFetch(url, options) {
+  let response = await fetch(url, { ...options, headers: { ...(options.headers || {}), ...authHeader() } });
+  if (response.status === 401 && onAuthExpired) {
+    const refreshed = await onAuthExpired();
+    if (refreshed) {
+      response = await fetch(url, { ...options, headers: { ...(options.headers || {}), ...authHeader() } });
+    }
+  }
+  return response;
+}
+
+/** Best-effort parse of an error body; a non-JSON response must not mask the status. */
+async function readProblem(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Builds an Error carrying the HTTP status plus any per-field validation messages. */
+function apiError(response, problem, fallback) {
+  const error = new Error(problem?.message || fallback);
+  error.status = response.status;
+  error.fieldErrors = problem?.fieldErrors || null;
+  return error;
 }
 
 export const ApiClient = {
@@ -125,10 +186,7 @@ export const ApiClient = {
     formData.append('amount', amount.toString());
 
     const url = `${GATEWAY_URL}/api/contracts/upload`;
-    const response = await fetch(url, {
-      method: 'POST',
-      body: formData,
-    });
+    const response = await authedFetch(url, { method: 'POST', body: formData });
 
     if (response.ok) {
       return await response.json();
@@ -142,9 +200,41 @@ export const ApiClient = {
     return await apiFetch(url);
   },
 
+  // --- ADMIN-only user administration (auth-service, proxied by the gateway) -------------
+
+  /**
+   * List users. The response never contains password hashes; auth-service maps entities to
+   * a UserResponse of id, username, email, enabled and roles.
+   * @throws Error with a `status` field so the caller can distinguish 403 from a failure.
+   */
+  async listUsers() {
+    const response = await authedFetch(`${GATEWAY_URL}/api/users`, { method: 'GET' });
+    if (response.ok) {
+      const users = await response.json();
+      return Array.isArray(users) ? users : [];
+    }
+    throw apiError(response, await readProblem(response), 'Unable to load users.');
+  },
+
+  /**
+   * Create a user. Authorization is enforced by the gateway and again by auth-service, so a
+   * non-admin reaching this call still gets a 403.
+   */
+  async createUser({ username, password, email, roles }) {
+    const response = await authedFetch(`${GATEWAY_URL}/api/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, email: email || null, roles }),
+    });
+    if (response.ok) {
+      return await response.json();
+    }
+    throw apiError(response, await readProblem(response), 'Unable to create the user.');
+  },
+
   async sendChatMessage(userMessage, conversationId) {
     const url = `${GATEWAY_URL}/api/analysis/chat`;
-    const response = await fetch(url, {
+    const response = await authedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userMessage, conversationId }),

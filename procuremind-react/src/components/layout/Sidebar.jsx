@@ -1,16 +1,23 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { Shield, LayoutDashboard, FileSearch, Building2, Bot, Upload, X } from 'lucide-react';
+import { useRoles } from '../../auth/roles';
+import { Shield, LayoutDashboard, FileSearch, Building2, Bot, Upload, X, UsersRound } from 'lucide-react';
 
 export function Sidebar() {
   const { activeTab, setActiveTab, setUploadModalOpen, conversationId, isMobileSidebarOpen, setIsMobileSidebarOpen } = useApp();
+  const { canWrite, isAdmin } = useRoles();
 
   const navItems = [
     { id: 'dashboard', label: 'BI Dashboard', icon: LayoutDashboard },
     { id: 'intelligence', label: 'Document Intelligence', icon: FileSearch },
     { id: 'vendors', label: 'Vendors Portfolio', icon: Building2 },
-    { id: 'chat', label: 'AI Chat Assistant', icon: Bot }
+    // The assistant costs an LLM call, so it is ANALYST/ADMIN only (plan section 12).
+    ...(canWrite ? [{ id: 'chat', label: 'AI Chat Assistant', icon: Bot }] : [])
   ];
+
+  // User management is ADMIN only. VIEWER and ANALYST never see the entry, and the screen
+  // itself re-checks the role because hiding a button is not a security control.
+  const adminItems = isAdmin ? [{ id: 'admin', label: 'User Management', icon: UsersRound }] : [];
 
   const handleNavClick = (id) => {
     setActiveTab(id);
@@ -65,19 +72,47 @@ export function Sidebar() {
         })}
       </div>
 
-      {/* Upload Action */}
-      <div className="p-4 border-t border-slate-900">
-        <button
-          onClick={() => {
-            setUploadModalOpen(true);
-            setIsMobileSidebarOpen(false);
-          }}
-          className="w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-sm font-medium text-slate-200 transition-colors"
-        >
-          <Upload className="w-4 h-4 text-blue-400" />
-          <span>Ingest Contract</span>
-        </button>
-      </div>
+      {adminItems.length > 0 && (
+        <div className="px-4 pb-4 space-y-1">
+          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2">
+            Administration
+          </div>
+          {adminItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleNavClick(item.id)}
+                className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  isActive
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Upload Action - ANALYST/ADMIN only; the gateway rejects it for other roles anyway. */}
+      {canWrite && (
+        <div className="p-4 border-t border-slate-900">
+          <button
+            onClick={() => {
+              setUploadModalOpen(true);
+              setIsMobileSidebarOpen(false);
+            }}
+            className="w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-sm font-medium text-slate-200 transition-colors"
+          >
+            <Upload className="w-4 h-4 text-blue-400" />
+            <span>Ingest Contract</span>
+          </button>
+        </div>
+      )}
 
       {/* System Status Footer */}
       <div className="p-4 border-t border-slate-800 bg-slate-900/40 text-xs space-y-1.5">

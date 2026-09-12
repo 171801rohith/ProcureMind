@@ -43,6 +43,24 @@ spring:
   flyway:
     enabled: true
 
+  # OAuth2 Resource Server. The JWKS URL differs by how the service is run, so the value
+  # lives in AUTH_JWK_SET_URI and the default here is the host/IDE one:
+  #   - docker compose sets AUTH_JWK_SET_URI=http://auth-service:8083/oauth2/jwks (service DNS)
+  #   - a plain `mvn spring-boot:run` or an IDE run uses this localhost default
+  # The issuer is deliberately NOT derived from this URL: app.security.issuer-uri stays the
+  # static browser-facing issuer in both modes, so the `iss` claim is validated identically.
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${AUTH_JWK_SET_URI:http://localhost:8083/oauth2/jwks}
+
+# Resource-server enforcement toggle. See docs/AUTH_IMPLEMENTATION_PLAN.md sections 8 & 13.
+app:
+  security:
+    enforce: ${AUTH_ENABLED:true}
+    issuer-uri: ${AUTH_ISSUER_URI:http://localhost:8083}
+
 # Swagger UI Configuration
 springdoc:
   api-docs:
@@ -57,7 +75,7 @@ management:
         include: health, info
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
 
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

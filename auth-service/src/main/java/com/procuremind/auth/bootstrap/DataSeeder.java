@@ -89,12 +89,37 @@ public class DataSeeder implements ApplicationRunner {
     private void seedReactClient() {
         AuthProperties.Client cfg = properties.getClients().getReact();
         String clientId = cfg.getClientId();
-        if (registeredClientRepository.findByClientId(clientId) != null) {
-            log.info("OAuth2 client '{}' already registered; leaving it unchanged", clientId);
+        RegisteredClient existing = registeredClientRepository.findByClientId(clientId);
+        if (existing != null) {
+            reconcileReactRedirectUris(existing, cfg);
             return;
         }
-        RegisteredClient client = RegisteredClient.withId(UUID.randomUUID().toString())
-                .clientId(clientId)
+        RegisteredClient client = reactClient(UUID.randomUUID().toString(), cfg);
+        registeredClientRepository.save(client);
+        log.info("Registered public OAuth2 client '{}' (Authorization Code + PKCE)", clientId);
+    }
+
+    /**
+     * Adds the silent-renew redirect URI to an already-registered SPA client.
+     *
+     * <p>The seeder otherwise leaves existing registrations alone, but this one URI has to
+     * catch up: an environment seeded before silent renew existed would reject every
+     * prompt=none renewal with {@code invalid_request}, and the only alternative would be
+     * editing the {@code oauth2_registered_client} row by hand.
+     */
+    private void reconcileReactRedirectUris(RegisteredClient existing, AuthProperties.Client cfg) {
+        String silentRedirectUri = cfg.getSilentRedirectUri();
+        if (!StringUtils.hasText(silentRedirectUri) || existing.getRedirectUris().contains(silentRedirectUri)) {
+            log.info("OAuth2 client '{}' already registered; leaving it unchanged", cfg.getClientId());
+            return;
+        }
+        registeredClientRepository.save(reactClient(existing.getId(), cfg));
+        log.info("Added silent-renew redirect URI to OAuth2 client '{}'", cfg.getClientId());
+    }
+
+    private RegisteredClient reactClient(String id, AuthProperties.Client cfg) {
+        RegisteredClient.Builder builder = RegisteredClient.withId(id)
+                .clientId(cfg.getClientId())
                 .clientName("ProcureMind React SPA")
                 .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
@@ -108,10 +133,12 @@ public class DataSeeder implements ApplicationRunner {
                         .requireProofKey(true)
                         .requireAuthorizationConsent(false)
                         .build())
-                .tokenSettings(tokenSettings())
-                .build();
-        registeredClientRepository.save(client);
-        log.info("Registered public OAuth2 client '{}' (Authorization Code + PKCE)", clientId);
+                .tokenSettings(tokenSettings());
+
+        if (StringUtils.hasText(cfg.getSilentRedirectUri())) {
+            builder.redirectUri(cfg.getSilentRedirectUri());
+        }
+        return builder.build();
     }
 
     private void seedStreamlitClient() {

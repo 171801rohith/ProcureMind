@@ -1,11 +1,12 @@
 # ProcureMind — Authentication & Authorization Implementation Plan
 
-> **Status: PLAN ONLY. Nothing in this document has been implemented.**
-> This is the single source-of-truth blueprint for adding OIDC-based authentication and
-> role-based authorization to ProcureMind. It describes an incremental, reversible rollout.
-> **Existing unauthenticated behaviour continues to work unchanged until Phase 7 (the
-> explicit cutover).** No unrelated refactoring and no pre-existing technical-debt fixes
-> are in scope except where a change is directly required for authentication.
+> **Status: IMPLEMENTED. Phases 0 through 8 are complete and enforcement is live.**
+> This remains the single source-of-truth blueprint for the OIDC-based authentication and
+> role-based authorization now in place. Authentication is enforced by default at the API
+> gateway, contract-service and ai-service; `AUTH_ENABLED=false` is retained only as a
+> documented emergency kill switch, and the role matrix in section 12 is the one the code
+> applies. Phase descriptions below are kept as the record of how the rollout was
+> sequenced.
 
 ---
 

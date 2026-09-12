@@ -5,8 +5,8 @@ import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -15,12 +15,13 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 /**
- * Non–authorization-server web security: the hosted login page, the public health/info
+ * Non–authorization-server web security: the branded hosted login page, the public health/info
  * probes, the password encoder shared by form login and OAuth2 client-secret checks, and a
  * narrow CORS policy for the token / JWKS / userinfo endpoints the browser calls
  * (see {@code docs/AUTH_IMPLEMENTATION_PLAN.md} sections 10 and 15).
  */
 @Configuration(proxyBeanMethods = false)
+@EnableWebSecurity
 public class DefaultSecurityConfig {
 
     @Bean
@@ -29,10 +30,16 @@ public class DefaultSecurityConfig {
         http
                 .authorizeHttpRequests((authorize) -> authorize
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info",
-                                "/login", "/error", "/default-ui.css", "/webjars/**", "/assets/**")
+                                "/login", "/error", "/css/**", "/default-ui.css", "/webjars/**", "/assets/**")
                         .permitAll()
                         .anyRequest().authenticated())
-                .formLogin(Customizer.withDefaults());
+                // Only the rendered page changes: credentials still post to Spring Security's
+                // own /login processing endpoint and are still checked by JpaUserDetailsService.
+                .formLogin(form -> form
+                        .loginPage("/login")
+                        .failureUrl("/login?error")
+                        .permitAll())
+                .logout(logout -> logout.logoutSuccessUrl("/login?logout"));
         return http.build();
     }
 

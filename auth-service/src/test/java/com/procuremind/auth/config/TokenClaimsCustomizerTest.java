@@ -3,6 +3,11 @@ package com.procuremind.auth.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.assertj.core.api.InstanceOfAssertFactories;
+import org.springframework.security.jackson.SecurityJacksonModules;
+import org.springframework.security.oauth2.server.authorization.jackson.OAuth2AuthorizationServerJacksonModule;
+
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
@@ -31,6 +36,28 @@ class TokenClaimsCustomizerTest {
         assertThat(context.getClaims().build().getClaims().get("roles"))
                 .asInstanceOf(InstanceOfAssertFactories.iterable(String.class))
                 .containsExactlyInAnyOrder("ANALYST", "VIEWER");
+    }
+
+    @Test
+    void theRolesClaimSurvivesTheAuthorizationStoreRoundTrip() {
+        // Regression guard for the logout failure. These claims are persisted with the
+        // authorization and read back by JdbcOAuth2AuthorizationService, whose mapper only
+        // trusts types on Spring Security's allow-list. A TreeSet serialised fine but failed
+        // to deserialise, so RP-initiated logout returned 400 and the session never ended.
+        JwtEncodingContext context = contextFor(OAuth2TokenType.ACCESS_TOKEN, "ROLE_ADMIN", "ROLE_VIEWER");
+
+        customizer.customize(context);
+        Object roles = context.getClaims().build().getClaims().get("roles");
+
+        ObjectMapper mapper = JsonMapper.builder()
+                .addModules(SecurityJacksonModules.getModules(getClass().getClassLoader()))
+                .addModules(new OAuth2AuthorizationServerJacksonModule())
+                .build();
+
+        String json = mapper.writeValueAsString(roles);
+        assertThat(mapper.readValue(json, Object.class))
+                .asInstanceOf(InstanceOfAssertFactories.iterable(String.class))
+                .containsExactly("ADMIN", "VIEWER");
     }
 
     @Test

@@ -1,0 +1,298 @@
+/*
+  ProcureMind sign-in styling.
+
+  Hand-written CSS on purpose: auth-service serves exactly two pages, so pulling in a CSS
+  framework would be disproportionate. The palette, radii and type scale mirror the React
+  application (slate background, blue accent) so the redirect does not feel like a different
+  product.
+*/
+
+:root {
+    --pm-bg: #020617;
+    --pm-surface: rgba(15, 23, 42, 0.72);
+    --pm-border: #1e293b;
+    --pm-border-strong: #334155;
+    --pm-text: #f1f5f9;
+    --pm-text-muted: #94a3b8;
+    --pm-text-faint: #64748b;
+    --pm-accent: #2563eb;
+    --pm-accent-hover: #3b82f6;
+    --pm-danger-bg: rgba(239, 68, 68, 0.1);
+    --pm-danger-border: rgba(239, 68, 68, 0.3);
+    --pm-danger-text: #fca5a5;
+    --pm-info-bg: rgba(59, 130, 246, 0.1);
+    --pm-info-border: rgba(59, 130, 246, 0.3);
+    --pm-info-text: #93c5fd;
+    --pm-radius: 16px;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--pm-bg);
+    color: var(--pm-text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+        Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+.auth-shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    min-height: 100vh;
+}
+
+/* ---------------------------------------------------------------- brand panel */
+
+.auth-brand {
+    display: none;
+    position: relative;
+    padding: 48px;
+    background:
+        radial-gradient(120% 90% at 12% 8%, rgba(37, 99, 235, 0.22) 0%, transparent 58%),
+        linear-gradient(160deg, #0b1220 0%, #020617 100%);
+    border-right: 1px solid var(--pm-border);
+}
+
+.auth-brand__inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    height: 100%;
+    max-width: 420px;
+}
+
+.auth-brand__title {
+    margin: 24px 0 6px;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.auth-brand__tagline {
+    margin: 0 0 32px;
+    color: var(--pm-text-muted);
+    font-size: 15px;
+}
+
+.auth-brand__points {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 14px;
+}
+
+.auth-brand__points li {
+    position: relative;
+    padding-left: 26px;
+    color: var(--pm-text-muted);
+}
+
+.auth-brand__points li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 7px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--pm-accent);
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.16);
+}
+
+/* ---------------------------------------------------------------- sign-in panel */
+
+.auth-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 32px 20px;
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 380px;
+    padding: 32px;
+    background: var(--pm-surface);
+    border: 1px solid var(--pm-border);
+    border-radius: var(--pm-radius);
+    box-shadow: 0 24px 60px rgba(2, 6, 23, 0.6);
+    backdrop-filter: blur(12px);
+}
+
+.auth-mark,
+.auth-card__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    color: var(--pm-accent-hover);
+    background: rgba(37, 99, 235, 0.12);
+    border: 1px solid rgba(37, 99, 235, 0.24);
+}
+
+.auth-mark svg,
+.auth-card__mark svg {
+    width: 24px;
+    height: 24px;
+}
+
+.auth-card__title {
+    margin: 20px 0 4px;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.auth-card__subtitle {
+    margin: 0 0 24px;
+    color: var(--pm-text-muted);
+}
+
+/* ---------------------------------------------------------------- alerts */
+
+.auth-alert {
+    margin-bottom: 20px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    border: 1px solid transparent;
+}
+
+.auth-alert--error {
+    background: var(--pm-danger-bg);
+    border-color: var(--pm-danger-border);
+    color: var(--pm-danger-text);
+}
+
+.auth-alert--info {
+    background: var(--pm-info-bg);
+    border-color: var(--pm-info-border);
+    color: var(--pm-info-text);
+}
+
+/* ---------------------------------------------------------------- form */
+
+.auth-form {
+    display: grid;
+    gap: 16px;
+}
+
+.auth-field {
+    display: grid;
+    gap: 6px;
+}
+
+.auth-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--pm-text-muted);
+    letter-spacing: 0.02em;
+}
+
+.auth-field input {
+    width: 100%;
+    padding: 11px 13px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--pm-text);
+    background: #0b1220;
+    border: 1px solid var(--pm-border-strong);
+    border-radius: 10px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.auth-field input::placeholder {
+    color: var(--pm-text-faint);
+}
+
+.auth-field input:focus {
+    outline: none;
+    border-color: var(--pm-accent);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+
+.auth-submit {
+    margin-top: 4px;
+    padding: 11px 16px;
+    width: 100%;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--pm-accent);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.05s ease;
+}
+
+.auth-submit:hover {
+    background: var(--pm-accent-hover);
+}
+
+.auth-submit:active {
+    transform: scale(0.99);
+}
+
+.auth-submit:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.45);
+}
+
+.auth-footnote {
+    margin: 22px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--pm-border);
+    color: var(--pm-text-faint);
+    font-size: 12px;
+}
+
+.auth-copyright {
+    margin: 0;
+    color: var(--pm-text-faint);
+    font-size: 12px;
+}
+
+/* ---------------------------------------------------------------- responsive */
+
+@media (min-width: 900px) {
+    .auth-shell {
+        grid-template-columns: 1.05fr 1fr;
+    }
+
+    .auth-brand {
+        display: block;
+    }
+
+    .auth-card__mark {
+        display: none;
+    }
+
+    .auth-card__title {
+        margin-top: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+    }
+}

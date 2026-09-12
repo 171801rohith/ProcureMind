@@ -48,6 +48,10 @@ auth:
     react:
       client-id: ${REACT_OIDC_CLIENT_ID:procuremind-react}
       redirect-uri: ${REACT_OIDC_REDIRECT_URI:http://localhost:5173/}
+      # Target of the hidden silent-renew iframe. Spring Authorization Server does not issue
+      # refresh tokens to public clients, so the SPA renews via prompt=none instead and this
+      # URI must be registered for that request to be accepted.
+      silent-redirect-uri: ${REACT_OIDC_SILENT_REDIRECT_URI:http://localhost:5173/silent-renew.html}
       post-logout-redirect-uri: ${REACT_OIDC_POST_LOGOUT_REDIRECT_URI:http://localhost:5173/}
     streamlit:
       client-id: ${STREAMLIT_OIDC_CLIENT_ID:procuremind-streamlit}
@@ -66,8 +70,11 @@ management:
         include: health, info
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
 
 logging:
   level:
     org.springframework.security: INFO
+    # RP-initiated logout fails silently from the browser's point of view: the endpoint just
+    # returns 400 and the session stays alive. DEBUG here names the reason.
+    org.springframework.security.oauth2.server.authorization.oidc.web.OidcLogoutEndpointFilter: DEBUG
