@@ -54,6 +54,18 @@
 			<optional>true</optional>
 		</dependency>
 
+		<!-- Rate limiting for /login and /oauth2/token (see ARCHITECTURE_REVIEW.md #5). Caffeine's
+		     version is managed by spring-boot-dependencies; Bucket4j's is not, so it is pinned here. -->
+		<dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j_jdk17-core</artifactId>
+			<version>8.14.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-core</artifactId>

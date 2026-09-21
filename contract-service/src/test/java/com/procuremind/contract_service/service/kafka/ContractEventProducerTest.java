@@ -2,16 +2,18 @@ package com.procuremind.contract_service.service.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import com.procuremind.common.dto.ContractUploadedEvent;
+import com.procuremind.common.tracing.CorrelationIds;
 
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,10 +50,12 @@ class ContractEventProducerTest {
 
         producer().publishContractUploadEvent(CONTRACT_ID, "msa.pdf", "obj-1_msa.pdf");
 
-        ArgumentCaptor<Object> payload = ArgumentCaptor.forClass(Object.class);
-        verify(kafkaTemplate).send(eq("contract.uploaded"), eq(CONTRACT_ID.toString()), payload.capture());
-        assertThat(payload.getValue())
-                .isEqualTo(new ContractUploadedEvent(CONTRACT_ID, "msa.pdf", "obj-1_msa.pdf"));
+        ProducerRecord<String, Object> sent = capturedRecord();
+        assertThat(sent.topic()).isEqualTo("contract.uploaded");
+        assertThat(sent.key()).isEqualTo(CONTRACT_ID.toString());
+        assertThat(sent.value()).isEqualTo(new ContractUploadedEvent(CONTRACT_ID, "msa.pdf", "obj-1_msa.pdf"));
+        assertThat(sent.headers().lastHeader(CorrelationIds.HEADER).value())
+                .isEqualTo(CONTRACT_ID.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
@@ -67,7 +71,7 @@ class ContractEventProducerTest {
         givenSendSucceeds();
         TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.afterCommit());
 
-        verify(kafkaTemplate).send(eq("contract.uploaded"), eq(CONTRACT_ID.toString()), any());
+        assertThat(capturedRecord().topic()).isEqualTo("contract.uploaded");
     }
 
     @Test
@@ -89,6 +93,14 @@ class ContractEventProducerTest {
     private void givenSendSucceeds() {
         CompletableFuture<SendResult<String, Object>> future = new CompletableFuture<>();
         future.complete(null);
-        given(kafkaTemplate.send(any(String.class), any(String.class), any())).willReturn(future);
+        ProducerRecord<String, Object> anyRecord = any();
+        given(kafkaTemplate.send(anyRecord)).willReturn(future);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ProducerRecord<String, Object> capturedRecord() {
+        ArgumentCaptor<ProducerRecord<String, Object>> captor = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaTemplate).send(captor.capture());
+        return captor.getValue();
     }
 }

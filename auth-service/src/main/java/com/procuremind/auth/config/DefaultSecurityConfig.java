@@ -2,6 +2,8 @@ package com.procuremind.auth.config;
 
 import java.util.List;
 
+import com.procuremind.auth.security.ratelimit.RateLimitFilter;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -10,6 +12,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.session.DisableEncodeUrlFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -26,7 +29,8 @@ public class DefaultSecurityConfig {
 
     @Bean
     @Order(2)
-    SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http, RateLimitFilter rateLimitFilter)
+            throws Exception {
         http
                 .authorizeHttpRequests((authorize) -> authorize
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info",
@@ -39,7 +43,10 @@ public class DefaultSecurityConfig {
                         .loginPage("/login")
                         .failureUrl("/login?error")
                         .permitAll())
-                .logout(logout -> logout.logoutSuccessUrl("/login?logout"));
+                .logout(logout -> logout.logoutSuccessUrl("/login?logout"))
+                // Runs before every other filter (including UsernamePasswordAuthenticationFilter)
+                // so a rate-limited POST /login never reaches JpaUserDetailsService.
+                .addFilterBefore(rateLimitFilter, DisableEncodeUrlFilter.class);
         return http.build();
     }
 

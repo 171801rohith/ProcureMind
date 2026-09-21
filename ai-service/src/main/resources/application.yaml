@@ -1,6 +1,13 @@
 server:
   port: 8082
 
+# Puts the contract id (restored into MDC by ContractEventListener on every message it picks
+# up) into every log line, so one contract's journey through this service can be grepped by
+# id instead of manually correlating timestamps across log statements.
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%X{contractId:-}] %-40.40logger{39} : %m%n%wEx"
+
 spring:
   application:
     name: ai-service
@@ -45,6 +52,11 @@ spring:
     enabled: true
     baseline-on-migrate: true
     locations: classpath:db/migration
+    # contract-service now owns the `contracts` table's DDL going forward, in its own
+    # separate flyway_schema_history_contract table (see contract-service's application.yaml
+    # for why a shared history table doesn't work across two independently-deployed
+    # services). This service's historical V1 is kept unchanged, purely for checksum
+    # compatibility with databases that already applied it.
 
   # OAuth2 Resource Server. The JWKS URL differs by how the service is run, so the value
   # lives in AUTH_JWK_SET_URI and the default here is the host/IDE one:
@@ -66,6 +78,26 @@ spring:
         options:
           model: ${AI_MODEL}
           temperature: 0.0
+    retry:
+      # Spring AI retries a timed-out call (ResourceAccessException) itself, by default up
+      # to 10 attempts with exponential backoff up to 3m between tries. Left at that default,
+      # a single hung call would cost up to ~10 x 18m plus backoff before Spring AI gives up
+      # — multiplying the read-timeout below into a multi-hour stall instead of bounding it.
+      # Kafka's own retry/backoff (3 delivery attempts) is already the intended retry layer
+      # for a hung LLM call, so this is capped to a single attempt: one read-timeout, one
+      # failure, handed straight to the Kafka consumer's error handler.
+      max-attempts: 1
+
+  # Spring AI's OpenAiApi (the Ollama-compatible client used for every screening/analysis
+  # call) is built with the auto-configured RestClient.Builder bean, which Boot wires from
+  # these properties. Without an explicit read-timeout, a hung Ollama call blocks the Kafka
+  # consumer thread indefinitely — bounded here at 18 minutes so a single call still fails
+  # within max.poll.interval.ms (30m above) and flows into the existing retry/DLT path,
+  # instead of stalling the whole pipeline for up to ~90 minutes (3 delivery attempts x 30m).
+  http:
+    client:
+      connect-timeout: 10s
+      read-timeout: 18m
 
 springdoc:
   api-docs:

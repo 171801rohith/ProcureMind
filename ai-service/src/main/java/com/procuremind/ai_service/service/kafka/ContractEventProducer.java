@@ -1,13 +1,18 @@
 package com.procuremind.ai_service.service.kafka;
 
 import com.procuremind.common.dto.PageIndexedEvent;
+import com.procuremind.common.tracing.CorrelationIds;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.internals.RecordHeader;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -67,7 +72,10 @@ public class ContractEventProducer {
     }
 
     private void send(String topic, UUID key, Object payload) {
-        kafkaTemplate.send(topic, key.toString(), payload).whenComplete((result, ex) -> {
+        ProducerRecord<String, Object> record = new ProducerRecord<>(topic, null, key.toString(), payload,
+                List.of(new RecordHeader(CorrelationIds.HEADER, key.toString().getBytes(StandardCharsets.UTF_8))));
+
+        kafkaTemplate.send(record).whenComplete((result, ex) -> {
             if (ex != null) {
                 log.error("Failed to publish {} for contract [{}] — downstream will not observe this "
                         + "transition and the contract may stall", topic, key, ex);

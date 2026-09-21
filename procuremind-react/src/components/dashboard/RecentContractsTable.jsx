@@ -3,10 +3,11 @@ import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
-import { Search, ArrowUpDown, ChevronRight } from 'lucide-react';
+import { Search, ArrowUpDown, ChevronRight, Download } from 'lucide-react';
+import { exportContractsToCsv } from '../../utils/exportUtils';
 
 export function RecentContractsTable() {
-  const { contracts, setActiveTab } = useApp();
+  const { contracts, setActiveTab, isLoading } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [riskFilter, setRiskFilter] = useState('ALL');
@@ -86,6 +87,18 @@ export function RecentContractsTable() {
             <option value="MEDIUM">Medium Risk (4.0-6.9)</option>
             <option value="LOW">Low Risk (&lt; 4.0)</option>
           </select>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => exportContractsToCsv(filteredContracts)}
+            disabled={isLoading || filteredContracts.length === 0}
+            title={filteredContracts.length === 0 ? 'No contracts to export' : 'Export the visible contracts as a CSV file'}
+            className="gap-1.5 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export CSV</span>
+          </Button>
         </div>
       </div>
 

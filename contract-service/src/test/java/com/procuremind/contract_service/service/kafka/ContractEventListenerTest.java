@@ -1,28 +1,24 @@
 package com.procuremind.contract_service.service.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 
-import java.util.Optional;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import com.procuremind.common.dto.PageIndexedEvent;
-import com.procuremind.contract_service.entity.Contract;
-import com.procuremind.contract_service.repository.ContractRepository;
+import com.procuremind.common.tracing.CorrelationIds;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.MDC;
 
 /**
- * The contract lifecycle has to survive Kafka's at-least-once delivery: a redelivered
- * {@code contract.indexed} must not drag an already-ANALYZED contract backwards, and a
- * FAILED contract must not be quietly revived by a late success.
+ * The listener's own job is now just delegation and correlation-id bookkeeping — lifecycle
+ * rules live in {@link ContractStatusUpdaterTest}.
  */
 @ExtendWith(MockitoExtension.class)
 class ContractEventListenerTest {
@@ -30,77 +26,55 @@ class ContractEventListenerTest {
     private static final UUID CONTRACT_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
     @Mock
-    ContractRepository contractRepository;
+    ContractStatusUpdater statusUpdater;
 
-    @ParameterizedTest(name = "{0} -> {1} advances")
-    @CsvSource({
-            "UPLOADED,INDEXED",
-            "UPLOADED,ANALYZED",
-            "INDEXED,ANALYZED",
-            "UPLOADED,FAILED",
-            "INDEXED,FAILED",
-            "ANALYZED,FAILED",
-            // A failure is usually environmental, so reprocessing must be able to clear it.
-            "FAILED,INDEXED",
-            "FAILED,ANALYZED"
-    })
-    void theLifecycleMovesForwardAndIntoFailure(String current, String candidate) {
-        assertThat(ContractEventListener.shouldAdvance(current, candidate)).isTrue();
-    }
+    @Test
+    void handleContractIndexedAdvancesToIndexed() {
+        listener().handleContractIndexed(new PageIndexedEvent(CONTRACT_ID, "INDEXED"), null);
 
-    @ParameterizedTest(name = "{0} -> {1} is ignored")
-    @CsvSource({
-            "INDEXED,INDEXED",
-            "ANALYZED,INDEXED",
-            "ANALYZED,ANALYZED",
-            "INDEXED,UPLOADED",
-            "FAILED,FAILED"
-    })
-    void theLifecycleNeverMovesBackwardsAndFailureIsTerminal(String current, String candidate) {
-        assertThat(ContractEventListener.shouldAdvance(current, candidate)).isFalse();
+        verify(statusUpdater).advance(CONTRACT_ID, "INDEXED");
     }
 
     @Test
-    void aRedeliveredIndexedEventLeavesAnAnalyzedContractAlone() {
-        Contract contract = contractAt("ANALYZED");
-        given(contractRepository.findById(CONTRACT_ID)).willReturn(Optional.of(contract));
+    void handleContractAnalyzedAdvancesToAnalyzed() {
+        listener().handleContractAnalyzed(new PageIndexedEvent(CONTRACT_ID, "ANALYSIS_COMPLETED"), null);
 
-        listener().handleContractIndexed(new PageIndexedEvent(CONTRACT_ID, "INDEXED"));
-
-        assertThat(contract.getStatus()).isEqualTo("ANALYZED");
-        verify(contractRepository, never()).save(contract);
+        verify(statusUpdater).advance(CONTRACT_ID, "ANALYZED");
     }
 
     @Test
-    void aTerminalFailureIsRecorded() {
-        Contract contract = contractAt("INDEXED");
-        given(contractRepository.findById(CONTRACT_ID)).willReturn(Optional.of(contract));
+    void handleContractFailedAdvancesToFailed() {
+        listener().handleContractFailed(new PageIndexedEvent(CONTRACT_ID, "FAILED"), null);
 
-        listener().handleContractFailed(new PageIndexedEvent(CONTRACT_ID, "FAILED"));
-
-        assertThat(contract.getStatus()).isEqualTo("FAILED");
-        verify(contractRepository).save(contract);
+        verify(statusUpdater).advance(CONTRACT_ID, ContractStatusUpdater.FAILED);
     }
 
     @Test
-    void anEventForAnUnknownContractIsIgnoredRatherThanThrown() {
-        given(contractRepository.findById(CONTRACT_ID)).willReturn(Optional.empty());
+    void theCorrelationHeaderIsRestoredIntoMdcForTheDurationOfProcessingThenCleared() {
+        byte[] header = CONTRACT_ID.toString().getBytes(StandardCharsets.UTF_8);
+        doAnswer(invocation -> {
+            assertThat(MDC.get(CorrelationIds.MDC_KEY)).isEqualTo(CONTRACT_ID.toString());
+            return null;
+        }).when(statusUpdater).advance(CONTRACT_ID, "INDEXED");
 
-        // Throwing here would send the record around the retry/DLT path forever for a
-        // contract that simply does not exist.
-        listener().handleContractAnalyzed(new PageIndexedEvent(CONTRACT_ID, "ANALYSIS_COMPLETED"));
+        listener().handleContractIndexed(new PageIndexedEvent(CONTRACT_ID, "INDEXED"), header);
 
-        verify(contractRepository, never()).save(org.mockito.ArgumentMatchers.any());
+        assertThat(MDC.get(CorrelationIds.MDC_KEY)).isNull();
+    }
+
+    @Test
+    void aMissingCorrelationHeaderFallsBackToTheEventsOwnContractId() {
+        doAnswer(invocation -> {
+            assertThat(MDC.get(CorrelationIds.MDC_KEY)).isEqualTo(CONTRACT_ID.toString());
+            return null;
+        }).when(statusUpdater).advance(CONTRACT_ID, "INDEXED");
+
+        listener().handleContractIndexed(new PageIndexedEvent(CONTRACT_ID, "INDEXED"), null);
+
+        assertThat(MDC.get(CorrelationIds.MDC_KEY)).isNull();
     }
 
     private ContractEventListener listener() {
-        return new ContractEventListener(contractRepository);
-    }
-
-    private static Contract contractAt(String status) {
-        Contract contract = new Contract();
-        contract.setId(CONTRACT_ID);
-        contract.setStatus(status);
-        return contract;
+        return new ContractEventListener(statusUpdater);
     }
 }

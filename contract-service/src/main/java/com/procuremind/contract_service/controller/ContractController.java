@@ -1,6 +1,7 @@
 package com.procuremind.contract_service.controller;
 
 import com.procuremind.contract_service.dto.ContractResponseDto;
+import com.procuremind.contract_service.exception.UnsupportedFileTypeException;
 import com.procuremind.contract_service.service.ContractService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +32,8 @@ public class ContractController {
         try {
             ContractResponseDto response = contractService.processNewContract(file, vendorName);
             return ResponseEntity.accepted().body(response);
+        } catch (UnsupportedFileTypeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Try again later.");
         }

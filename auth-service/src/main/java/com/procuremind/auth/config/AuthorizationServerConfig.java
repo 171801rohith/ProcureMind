@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.Set;
 import java.util.TreeSet;
 
+import com.procuremind.auth.security.ratelimit.RateLimitFilter;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
@@ -25,6 +27,7 @@ import org.springframework.security.oauth2.server.authorization.token.JwtEncodin
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.session.DisableEncodeUrlFilter;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 
@@ -46,7 +49,8 @@ public class AuthorizationServerConfig {
 
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
-    SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http, RateLimitFilter rateLimitFilter)
+            throws Exception {
         http.oauth2AuthorizationServer((authorizationServer) -> {
             http.securityMatcher(authorizationServer.getEndpointsMatcher());
             authorizationServer.oidc(Customizer.withDefaults());
@@ -56,6 +60,10 @@ public class AuthorizationServerConfig {
         http.oauth2ResourceServer((resourceServer) -> resourceServer.jwt(Customizer.withDefaults()));
         http.exceptionHandling((exceptions) -> exceptions.defaultAuthenticationEntryPointFor(
                 new LoginUrlAuthenticationEntryPoint("/login"), htmlRequestMatcher()));
+        // Same shared filter as DefaultSecurityConfig (see RateLimitFilterConfig); this chain
+        // is the one that actually sees POST /oauth2/token, since its securityMatcher scopes
+        // it to the authorization-server endpoints.
+        http.addFilterBefore(rateLimitFilter, DisableEncodeUrlFilter.class);
         return http.build();
     }
 

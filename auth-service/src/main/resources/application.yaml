@@ -68,6 +68,16 @@ auth:
   token:
     access-token-ttl: ${AUTH_ACCESS_TOKEN_TTL:PT15M}
     refresh-token-ttl: ${AUTH_REFRESH_TOKEN_TTL:PT8H}
+  # In-memory (Bucket4j + Caffeine, no Redis) rate limiting for POST /login and
+  # POST /oauth2/token. See ARCHITECTURE_REVIEW.md finding #5.
+  rate-limit:
+    enabled: ${AUTH_RATE_LIMIT_ENABLED:true}
+    ip:
+      capacity: ${AUTH_RATE_LIMIT_IP_CAPACITY:20}
+      period: ${AUTH_RATE_LIMIT_IP_PERIOD:PT1M}
+    identity:
+      capacity: ${AUTH_RATE_LIMIT_IDENTITY_CAPACITY:5}
+      period: ${AUTH_RATE_LIMIT_IDENTITY_PERIOD:PT1M}
 
 management:
   endpoints:

@@ -1,6 +1,13 @@
 server:
   port: 8081
 
+# Puts the contract id (restored into MDC by ContractService/ContractEventListener) into
+# every log line, so one contract's journey through this service can be grepped by id instead
+# of manually correlating timestamps across log statements.
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%X{contractId:-}] %-40.40logger{39} : %m%n%wEx"
+
 spring:
   application:
     name: contract-service
@@ -45,9 +52,24 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     properties:
       spring.json.trusted.packages: "com.procuremind.*"
-  # Disable Flyway for Day 1 testing
   flyway:
     enabled: true
+    # contract-service and ai-service share one physical schema (procuremind_db/public) but
+    # are independently deployed services shipping separate migration sets. Flyway's own
+    # validate() cross-checks the FULL applied-migration history against what is resolvable
+    # from the local classpath, so if both services recorded their migrations into the same
+    # flyway_schema_history table, each service would permanently fail validation on the
+    # other's versions ("Detected applied migration not resolved locally"). A dedicated
+    # history table per service avoids that: each service's Flyway only ever sees its own
+    # migrations, so there is nothing to cross-validate and no ordering dependency between
+    # the two services' schema bootstrapping.
+    table: flyway_schema_history_contract
+    # The schema is not empty on first run (ai-service's own migrations already created
+    # sibling tables), but this service's history table is new, so Flyway must baseline
+    # rather than refuse to run. baseline-version 0 keeps this service's V1 (below) at
+    # version 1, which is still ">" the baseline and so still gets applied.
+    baseline-on-migrate: true
+    baseline-version: 0
 
   # OAuth2 Resource Server. The JWKS URL differs by how the service is run, so the value
   # lives in AUTH_JWK_SET_URI and the default here is the host/IDE one:

@@ -109,6 +109,36 @@ class PdfParsingServiceTest {
     }
 
     @Test
+    void flatSingleLevelNumberingIsIndexedAsItsOwnSectionInsteadOfFallingIntoBodyText() throws Exception {
+        String flatNumberedText = """
+                1. Definitions
+                Capitalized terms have the meanings given in this section.
+                2. Term
+                This agreement runs for three years.
+                """;
+        givenTheDocumentIsNotYetParsed(flatNumberedText);
+
+        new PdfParsingService(minioClient, nodeRepository).parseAndIndexPdf(DOCUMENT_ID, OBJECT_NAME);
+
+        // root + two flat sections; neither heading fell through into the other's body text.
+        assertThat(saved).hasSize(3);
+        PageIndexNode root = saved.get(0);
+        PageIndexNode definitions = saved.get(1);
+        PageIndexNode term = saved.get(2);
+
+        assertThat(definitions.getNodeType()).isEqualTo(NodeType.SECTION);
+        assertThat(definitions.getLevel()).isEqualTo(2);
+        assertThat(definitions.getTitle()).isEqualTo("Definitions");
+        assertThat(definitions.getParentNodeId()).isEqualTo(root.getId());
+        assertThat(definitions.getRawContext()).contains("Capitalized terms have the meanings given");
+
+        assertThat(term.getNodeType()).isEqualTo(NodeType.SECTION);
+        assertThat(term.getLevel()).isEqualTo(2);
+        assertThat(term.getTitle()).isEqualTo("Term");
+        assertThat(term.getRawContext()).contains("This agreement runs for three years.");
+    }
+
+    @Test
     void aRedeliveredUploadEventDoesNotReparseTheDocument() throws Exception {
         given(nodeRepository.existsByDocumentId(DOCUMENT_ID)).willReturn(true);
 
@@ -121,8 +151,12 @@ class PdfParsingServiceTest {
     }
 
     private void givenTheDocumentIsNotYetParsed() throws Exception {
+        givenTheDocumentIsNotYetParsed(CONTRACT_TEXT);
+    }
+
+    private void givenTheDocumentIsNotYetParsed(String text) throws Exception {
         given(nodeRepository.existsByDocumentId(DOCUMENT_ID)).willReturn(false);
-        given(minioClient.getObject(any(GetObjectArgs.class))).willReturn(textResponse());
+        given(minioClient.getObject(any(GetObjectArgs.class))).willReturn(textResponse(text));
         given(nodeRepository.save(any(PageIndexNode.class))).willAnswer(invocation -> {
             PageIndexNode node = invocation.getArgument(0);
             if (node.getId() == null) {
@@ -135,12 +169,12 @@ class PdfParsingServiceTest {
         });
     }
 
-    private static GetObjectResponse textResponse() {
+    private static GetObjectResponse textResponse(String text) {
         return new GetObjectResponse(
                 Headers.of("Content-Type", "text/plain"),
                 "procuremind-contracts",
                 null,
                 OBJECT_NAME,
-                new ByteArrayInputStream(CONTRACT_TEXT.getBytes(StandardCharsets.UTF_8)));
+                new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)));
     }
 }

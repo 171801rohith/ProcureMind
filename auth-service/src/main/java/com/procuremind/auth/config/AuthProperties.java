@@ -19,6 +19,7 @@ public class AuthProperties {
     private final Admin admin = new Admin();
     private final Clients clients = new Clients();
     private final Token token = new Token();
+    private final RateLimit rateLimit = new RateLimit();
 
     /** RSA signing-key source. */
     @Setter
@@ -75,5 +76,40 @@ public class AuthProperties {
         private Duration accessTokenTtl = Duration.ofMinutes(15);
         private Duration refreshTokenTtl = Duration.ofHours(8);
 
+    }
+
+    /**
+     * In-memory (Bucket4j + Caffeine, no Redis) rate limiting for {@code /login} and
+     * {@code /oauth2/token} (see {@code ARCHITECTURE_REVIEW.md} finding #5). Two independent
+     * dimensions are limited per protected endpoint: the caller's IP address and the identity
+     * it is acting as (the form-login {@code username}, or the OAuth2 client id for the token
+     * endpoint). Either limit being exceeded rejects the request with HTTP 429.
+     */
+    @Setter
+    @Getter
+    public static class RateLimit {
+        private boolean enabled = true;
+        // Per-IP is more generous than per-identity: one IP can legitimately front several
+        // users (NAT/shared office network), so it exists as a coarse flood backstop rather
+        // than the primary brute-force defense.
+        private final Limit ip = new Limit(20);
+        // Per-identity is the primary brute-force defense: 5 attempts/minute is enough for a
+        // genuine typo or two but throttles a credential-stuffing run against one account.
+        private final Limit identity = new Limit(5);
+    }
+
+    @Setter
+    @Getter
+    public static class Limit {
+        private int capacity;
+        private Duration period = Duration.ofMinutes(1);
+
+        public Limit() {
+            this.capacity = 10;
+        }
+
+        public Limit(int capacity) {
+            this.capacity = capacity;
+        }
     }
 }
