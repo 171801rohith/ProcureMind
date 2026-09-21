@@ -1,133 +1,173 @@
-# ProcureMind React — Production SaaS Frontend (`procuremind-react`)
+# procuremind-react
 
-## Project Overview
+## Purpose
 
-**ProcureMind React** is an enterprise-grade SaaS web application built with **React**, **Vite**, and **Tailwind CSS**. It represents a modernized, production-ready rebuild of the original Streamlit dashboard (`procuremind-ui`).
+The primary user interface: dashboards, document intelligence, vendor portfolio, AI chat,
+contract upload and the admin user-management screen. It talks only to the API gateway and to
+auth-service.
 
-The platform acts as a Backend-For-Frontend (BFF) interface for corporate procurement officers, legal teams, and risk analysts. It merges raw contract ingestion metadata with AI-generated risk scoring, financial exposure visualizations, section-level Table of Contents (TOC) clause inspection, and transparent conversational AI.
+## Technology
 
----
+React 19, Vite, Tailwind CSS v4, Recharts, lucide-react, `oidc-client-ts` with
+`react-oidc-context`, oxlint, Vitest.
 
-## What Was Changed & Improved
-
-1. **Enterprise Architecture & Performance**: Replaced the Python Streamlit page-rerun execution model with a client-side React single-page application (SPA), eliminating full-page refreshes.
-2. **Dedicated Agentic AI Assistant**: Built a standalone full-page AI Chat workspace (`/chat`) with session UUID tracking, quick suggestion chips, message history, and expandable `agentTrace` execution steps.
-3. **Data Visualization (Recharts)**: Upgraded Plotly figures to responsive, interactive Recharts visualizations:
-   - **Scatter/Bubble Plot**: Risk Score vs Financial Commitment ($).
-   - **Donut Chart**: Risk Severity Breakdown (High, Medium, Low).
-   - **Bar Chart**: Vendor Portfolio Commitment matrix.
-4. **Interactive Document Intelligence View**:
-   - Collapsible TOC clause tree navigation.
-   - Legal Reading Pane displaying exact legal text (`rawContent`) and AI summaries.
-   - Identified Risks Panel with severity badges (`HIGH`, `MEDIUM`, `LOW`) and actionable mitigation suggestions.
-
----
-
-## Pages & User Workflows
-
-### 1. 📊 BI Executive Dashboard
-- **KPI Metric Strip**: Displays Total Contracts Ingested, High-Risk Agreements, Average Risk Score (out of 10), and Total Portfolio Exposure ($).
-- **Interactive Charts**: Responsive scatter plots and risk distribution donut charts.
-- **Recent Contracts Data Grid**: Features column sorting (Vendor, Amount, Risk Score), search bar debouncing, and multi-field status/risk filters.
-
-### 2. 🔍 Document Intelligence & Deep Clause Analysis
-- **Contract Selector**: Select any active contract from your portfolio.
-- **Structure TOC**: Inspect section tree nodes.
-- **Legal Reading Pane**: Displays exact legal wording and concise AI clause summaries.
-- **Identified Risks**: Flagged risk triggers mapped directly from AI microservice analysis.
-
-### 3. 🏢 Vendors Portfolio
-- **Vendor Risk Matrix**: Consolidates active contract counts, cumulative financial commitments, and average risk scores per vendor entity.
-
-### 4. 📤 Contract Ingestion Pipeline (Upload Modal)
-- **Drag-and-Drop Uploader**: Accepts `.pdf` files.
-- **Metadata Inputs**: Vendor Name, Contract Type, and Value ($).
-- **Status Polling**: Visualizes state transitions (`UPLOADED` ➔ `INDEXED` ➔ `ANALYZED`) via API polling.
-
-### 5. 🤖 Agentic AI Chat Assistant
-- **Conversational RAG**: Ask questions about portfolio exposure or vendor terms.
-- **Transparent Reasoning Accordion**: View exact agent execution steps (`agentTrace`).
-
----
-
-## Architecture & Data Flow
+## Entry point and shell
 
 ```
-procuremind-react/src/
-├── api/
-│   ├── client.js           # Central API client with fetch timeouts & fallback data
-│   └── mockData.js         # Realistic fallback dataset for offline/preview mode
+main.jsx        wraps <App/> in <AuthProvider {...oidcConfig}> from react-oidc-context
+App.jsx         auth gate, then AppProvider + Sidebar + Header + MainContent
+```
+
+**There is no router.** Navigation is a single `activeTab` string held in `AppContext`.
+`MainContent` switches on it:
+
+| `activeTab` | Renders |
+|---|---|
+| `dashboard` | `KPICards`, `ExposureChart`, `RiskDonutChart`, `RecentContractsTable` |
+| `intelligence` | `IntelligenceScreen` (`TOCNav`, `LegalReadingPane`, `RiskSidePanel`) |
+| `vendors` | `VendorPortfolio` |
+| `chat` | `ChatInterface` |
+| `admin` | `UserManagement` if admin, otherwise `Unauthorized` |
+
+`App` renders `<LoginScreen/>` when `AUTH_REQUIRED` is on and the user is not authenticated.
+
+Because there is no router, "navigating to the admin route" means setting `activeTab` to
+`admin`. The guard is in `MainContent`, and the real boundary is the backend.
+
+## Directory structure
+
+```
+src/
+├── main.jsx, App.jsx
+├── auth/         OIDC configuration, login screen, role helpers, silent renew
+├── api/          the single API client
+├── context/      AppContext, the only global state
 ├── components/
-│   ├── ui/                 # Reusable UI elements (Button, Card, Badge, Modal, Skeleton)
-│   ├── layout/             # Header navbar & left sidebar navigation
-│   ├── dashboard/          # KPI cards, scatter & donut charts, data grid
-│   ├── intelligence/       # TOC tree, reading pane, risk side panel
-│   ├── vendors/            # Vendor portfolio matrix & bar chart
-│   ├── upload/             # Drag-and-drop upload modal with polling
-│   └── chat/               # Dedicated AI chat workspace
-├── context/
-│   └── AppContext.jsx      # Global state provider (Active tab, contracts, chat session)
-├── App.jsx                 # Application layout shell & tab router
-└── main.jsx                # React application entry point
+│   ├── layout/       Header, Sidebar
+│   ├── dashboard/    KPI and chart widgets
+│   ├── intelligence/ TOC, reading pane, risk side panel
+│   ├── vendors/      VendorPortfolio
+│   ├── chat/         ChatInterface
+│   ├── upload/       UploadModal
+│   ├── admin/        UserManagement, Unauthorized
+│   └── ui/           Button, Card, Modal, Badge, Skeleton, EmptyState
+└── index.css
 ```
 
----
+## Authentication
 
-## Data & API Integration
+Authorization Code with PKCE against auth-service. No password is ever entered in React and
+there is no client secret.
 
-- **API Gateway Connection**: Consumes RESTful APIs at `VITE_GATEWAY_URL` (Default: `http://localhost:8080`).
-- **BFF Microservices**:
-  - `GET /api/contracts`
-  - `GET /api/analysis/dashboard-metrics`
-  - `GET /api/analysis/financial-exposure`
-  - `GET /api/analysis/risks/distribution`
-  - `GET /api/analysis/{contractId}`
-  - `GET /api/analysis/{contractId}/toc`
-  - `GET /api/analysis/node/{nodeId}`
-  - `GET /api/analysis/{contractId}/risks`
-  - `POST /api/contracts/upload`
-  - `GET /api/contracts/{id}/status`
-  - `POST /api/analysis/chat`
-- **Graceful Fallbacks**: If backend microservices are offline, the client automatically loads structured mock data so the application remains 100% interactive without crashing.
+| File | Role |
+|---|---|
+| `auth/authConfig.js` | `oidcConfig`: authority, public client id, `response_type: 'code'`, scope `openid profile roles`, `automaticSilentRenew`, `silent_redirect_uri`, and both token stores pinned to **sessionStorage** |
+| `auth/authFlags.js` | `AUTH_REQUIRED`, kept separate because `authConfig` touches `window.location` at import time |
+| `auth/LoginScreen.jsx` | Pre-redirect gate; the button calls `auth.signinRedirect()` |
+| `auth/silentRenew.js` + `/silent-renew.html` | The hidden renewal iframe's callback, calling `signinSilentCallback()` |
+| `auth/roles.js` | `claimedRoles(user)`, `hasWriteAccess(roles)`, `isAdminRole(roles)`, and the `useRoles()` hook |
 
----
+**Silent renew needs its own page.** `oidc-client-ts` defaults `silent_redirect_uri` to
+`redirect_uri`, which would boot the whole application inside the renewal iframe where nothing
+calls `signinSilentCallback`, so every renewal would time out. `silent-renew.html` is a second
+Vite entry point declared in `vite.config.js`, and its URI must be registered with
+auth-service.
 
-## User-Safety & Production Guardrails
+No refresh token is issued to this client; see `auth-service/README.md`.
 
-1. **Spam & Double-Submit Protection**: Submit buttons enter a loading spinner state and are disabled during in-flight network operations to prevent duplicate API submissions.
-2. **Input Debouncing**: Search inputs are debounced to avoid flooding the backend with network requests on every keystroke.
-3. **Timeout & Request Cancellation**: Network calls enforce a 120-second timeout using `AbortController`.
-4. **Skeleton Loading States**: Skeleton loaders replace cards, charts, and tables during data fetching, avoiding jarring layout shifts.
-5. **Session UUID Management**: Chat sessions maintain a persistent `conversationId` per browser session.
+`onSigninCallback` strips `?code=&state=` from the URL so the tab-based shell is untouched.
 
----
+### Roles in the UI
 
-## How To Run
+`useRoles()` reads `auth.user.profile.roles`, which comes from the id token.
 
-### 1. Install Dependencies
+| Helper | Effect |
+|---|---|
+| `canWrite` | Shows the upload button in `Header` and `Sidebar`, and the AI chat nav item |
+| `isAdmin` | Shows the User Management nav item and gates the admin screen |
+
+`hasWriteAccess` returns true when the login gate is disabled; `isAdminRole` deliberately does
+not, because without a token the admin screen's requests would all fail anyway.
+
+**This is presentation only.** Hiding a control is a convenience; the gateway and each service
+authorize every request independently.
+
+## API client
+
+`src/api/client.js` is the only place that calls the backend.
+
+| Export | Purpose |
+|---|---|
+| `setAccessToken(token)` | Called from `AppContext` whenever the OIDC user changes |
+| `setOnAuthExpired(fn)` | Handler used on a 401 |
+| `ApiClient` | All endpoint methods |
+
+Two request helpers:
+
+- `apiFetch` for reads. Adds `Accept` and the bearer token, applies a timeout via
+  `AbortController`, retries once after a successful refresh on 401, and **swallows errors,
+  returning `null`**.
+- `authedFetch` for writes. Returns the raw `Response` so callers can branch on status.
+
+| Method | Endpoint |
+|---|---|
+| `getContracts()` | `GET /api/contracts` |
+| `getContractAnalysis(id)` | `GET /api/analysis/{id}` |
+| `getMergedContracts()` | Both of the above, merged client-side |
+| `getDashboardMetrics()`, `getFinancialExposure()`, `getRiskDistribution()` | dashboard reads |
+| `getContractTOC(id)`, `getContractRisks(id)`, `getNodeDetail(nodeId)` | intelligence screen |
+| `uploadContract(file, vendorName, contractType, amount)` | `POST /api/contracts/upload` |
+| `checkContractStatus(id)` | `GET /api/contracts/{id}/status` |
+| `sendChatMessage(userMessage, conversationId)` | `POST /api/analysis/chat` |
+| `listUsers()`, `createUser({...})` | `GET`/`POST /api/users`, throwing errors carrying `status` and `fieldErrors` |
+
+`getMergedContracts` does N+1 calls by design: one `/api/contracts` then one
+`/api/analysis/{id}` per contract.
+
+Note: `uploadContract` sends `contractType` and `amount`, which **contract-service ignores**.
+
+## State
+
+`context/AppContext.jsx` is the only global state: `activeTab`, contracts, metrics, exposure,
+risk distribution, loading and error flags, the upload modal flag, the mobile sidebar flag, a
+generated `conversationId` and chat history.
+
+It also keeps the API client's token in sync and installs the expiry handler, which tries
+`auth.signinSilent()` once and falls back to `auth.signinRedirect()`.
+
+## Upload flow
+
+`Header` or `Sidebar` (both gated on `canWrite`) set `uploadModalOpen`. `UploadModal`:
+
+1. A file is chosen by drag-and-drop onto the zone, or through the "Browse File" label that
+   opens a hidden `<input type="file" accept=".pdf">`. The zone itself has no click handler.
+2. The submit button is `disabled={!file}`.
+3. `handleSubmit` returns early if no file, then calls `ApiClient.uploadContract`, polls
+   `checkContractStatus` once, calls `refreshData()` and closes.
+4. Any thrown error sets the message `"Upload failed. Check gateway connection."`
+
+## Build and run
+
 ```bash
-cd procuremind-react
 npm install
+npm run dev      # Vite dev server on 5173, proxies /api to localhost:8080
+npm run build    # builds index.html and silent-renew.html into dist/
+npm test         # Vitest
+npm run lint     # oxlint
 ```
 
-### 2. Run Development Server
-```bash
-npm run dev
-```
-Open `http://localhost:5173` in your web browser.
+In Docker the app is built into static files and served by nginx on port 5173. `VITE_*` values
+are **inlined at build time**, so changing one requires an image rebuild, not a restart. The
+port must stay 5173 because auth-service only accepts redirects to `http://localhost:5173/`
+and `/silent-renew.html`.
 
-### 3. Build for Production
-```bash
-npm run build
-```
+Environment variables are documented in `.env.example`.
 
----
+## Not clearly established
 
-## Environment Configuration
+`src/api/mockData.js` is present but its role in the running application is not clearly
+established from the current implementation.
 
-Create a `.env` file in `procuremind-react/`:
-
-```env
-VITE_GATEWAY_URL=http://localhost:8080
-VITE_API_TIMEOUT=120000
-```
+`components/intelligence/RiskSidePanel.jsx` renders `risk.category` and `risk.recommendation`.
+The `AnalysisRisk` entity has only `severity` and `description`, so those branches never
+receive data.

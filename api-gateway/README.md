@@ -1,172 +1,117 @@
-# ProcureMind — API Gateway Service (`api-gateway`)
+# api-gateway
 
-The **API Gateway** is the single entry-point reverse proxy for the **ProcureMind** microservices ecosystem. Powered by **Spring Boot 4.0.7** and **Spring Cloud Gateway WebMVC** on **Java 21**, it centralizes incoming client HTTP request routing, path rewriting, and downstream service health probes.
+## Purpose
 
----
+The single ingress for every browser call. It is a declarative reverse proxy that also acts as
+an OAuth2 resource server, applying coarse-grained role rules before forwarding.
 
-## 1. Purpose & Architectural Role
+It holds no business logic and no database.
 
-In the ProcureMind microservices topology, the API Gateway resides at the edge layer, exposing port `8080`. It decouples client applications (such as `procuremind-ui`) from downstream internal service network topologies, allowing services to scale or relocate without impacting API consumers.
+## Responsibilities
 
-```mermaid
-flowchart LR
-    subgraph Clients
-        UI[ProcureMind UI Dashboard]
-        API[External API Clients]
-    end
+- Route `/api/**` to contract-service, ai-service and auth-service
+- Validate the JWT and map the `roles` claim to authorities
+- Enforce the coarse role matrix
+- Own CORS for both frontends
+- Serve a landing page at `/` and a JSON route index at `/api`
+- Proxy `/health/contract` and `/health/ai`
 
-    subgraph Edge Layer
-        GW["API Gateway (Port 8080)\nSpring Cloud Gateway WebMVC"]
-    end
+## Technology
 
-    subgraph Downstream Microservices
-        CS["Contract Service\n(Port 8081)"]
-        AI["AI Service\n(Port 8082)"]
-    end
+Java 21, Spring Boot 4.0.7, Spring Cloud 2025.1.2, `spring-cloud-starter-gateway-server-webmvc`
+(the **servlet** gateway, not the reactive one), Spring Security OAuth2 Resource Server.
 
-    UI -->|HTTP /api/contracts/**| GW
-    UI -->|HTTP /api/analysis/**| GW
-    API -->|HTTP /health/contract| GW
-    API -->|HTTP /health/ai| GW
+**This module is not in the root Maven reactor.** Build it with `./mvnw -f api-gateway/pom.xml`.
 
-    GW -->|Route /api/contracts/**| CS
-    GW -->|Route /api/analysis/**| AI
-    GW -->|SetPath /actuator/health| CS
-    GW -->|SetPath /actuator/health| AI
-```
+## Entry point
 
----
+`src/main/java/com/procuremind/api_gateway/ApiGatewayApplication.java`, a plain
+`@SpringBootApplication`. Routes are declarative in `application.yaml`; there is no Java route
+configuration. Port 8080.
 
-## 2. Structure
+## Routes
 
-```
-api-gateway/
-├── pom.xml                                   # Maven build configuration & Spring Cloud dependencies
-├── README.md                                 # Module documentation
-└── src/
-    ├── main/
-    │   ├── java/com/procuremind/api_gateway/
-    │   │   └── ApiGatewayApplication.java    # Spring Boot application entry point
-    │   └── resources/
-    │       └── application.yaml              # Declarative routes, predicates, and filters
-    └── test/
-        └── java/com/procuremind/api_gateway/
-            └── ApiGatewayApplicationTests.java
-```
+| Route id | Predicate | Target |
+|---|---|---|
+| `contract-service-route` | `/api/contracts`, `/api/contracts/**` | `${CONTRACT_SERVICE_URL:http://localhost:8081}` |
+| `ai-service-route` | `/api/analysis`, `/api/analysis/**` | `${AI_SERVICE_URL:http://localhost:8082}` |
+| `auth-service-users-route` | `/api/users`, `/api/users/**` | `${AUTH_SERVICE_URL:http://localhost:8083}` |
+| `contract-service-health` | `/health/contract` | rewritten to `/actuator/health` on 8081 |
+| `ai-service-health` | `/health/ai` | rewritten to `/actuator/health` on 8082 |
 
----
+The user-administration route exists so the browser keeps a single origin; auth-service still
+enforces ADMIN itself.
 
-## 3. How It Works
+## Classes
 
-### Execution Flow: Request ➔ Predicate Matching ➔ Route Forwarding
+### SecurityConfig
 
-```
-1. [Inbound Request]: Client sends HTTP request to http://localhost:8080.
-2. [Route Evaluation]: Spring Cloud Gateway WebMVC matches path predicates defined in application.yaml.
-3. [Filter Execution]: For health check routes (/health/contract, /health/ai), the SetPath filter rewrites the path to /actuator/health.
-4. [Forwarding]: Request is proxied to the configured downstream target URL (CONTRACT_SERVICE_URL or AI_SERVICE_URL).
-5. [Response]: Returns downstream response directly to the client with identical HTTP status and headers.
-```
+**Location:** `security/SecurityConfig.java`
 
----
+Two mutually exclusive `SecurityFilterChain` beans selected by `app.security.enforce`, which
+binds to `${AUTH_ENABLED:true}`.
 
-## 4. Key Classes & Components
+| Constant | Value |
+|---|---|
+| `PUBLIC_PATHS` | `/`, `/api`, `/actuator/health`, `/actuator/health/**`, `/health/**` |
+| `READ_ROLES` | `VIEWER`, `ANALYST`, `ADMIN` |
+| `WRITE_ROLES` | `ANALYST`, `ADMIN` |
 
-### 1. `ApiGatewayApplication` (`src/main/java/com/procuremind/api_gateway/ApiGatewayApplication.java`)
-- Application bootstrap class annotated with `@SpringBootApplication`.
+Enforcing chain, in order:
 
-### 2. `application.yaml` (`src/main/resources/application.yaml`)
-- Declarative configuration declaring all route definitions, predicates, filter actions, actuator exposures, and logging levels.
+| Matcher | Rule |
+|---|---|
+| `OPTIONS /**` | permit (CORS preflight) |
+| `PUBLIC_PATHS` | permit |
+| `POST /api/contracts/upload` | `WRITE_ROLES` |
+| `POST /api/analysis/chat` | `WRITE_ROLES` |
+| `GET /api/contracts`, `/api/contracts/**` | `READ_ROLES` |
+| `GET /api/analysis`, `/api/analysis/**` | `READ_ROLES` |
+| `/api/users`, `/api/users/**` | `ADMIN` |
+| `/actuator/**` | `ADMIN` |
+| anything else | authenticated |
 
----
+An unrecognised value for the property registers **neither** chain, so Spring Boot's own
+locked-down default applies. The failure mode is closed, never open.
 
-## 5. Gateway Route Configuration
+No `X-User-*` header is read, added or trusted. The original `Authorization` header is
+forwarded and each downstream service validates it again.
 
-```yaml
-spring:
-  cloud:
-    gateway:
-      server:
-        webmvc:
-          routes:
-            - id: contract-service-route
-              uri: ${CONTRACT_SERVICE_URL:http://localhost:8081}
-              predicates:
-                - Path=/api/contracts, /api/contracts/**
+**`corsConfigurationSource`** allows origins `http://localhost:5173` and
+`http://localhost:3000`, methods GET/POST/PUT/DELETE/PATCH/OPTIONS, headers `Authorization`,
+`Content-Type`, `Accept`, `X-Requested-With`, with credentials enabled. The explicit header
+list matters: `"*"` with `allow-credentials: true` is invalid.
 
-            - id: ai-service-route
-              uri: ${AI_SERVICE_URL:http://localhost:8082}
-              predicates:
-                - Path=/api/analysis, /api/analysis/**
+### JwtDecoderConfig
 
-            - id: contract-service-health
-              uri: ${CONTRACT_SERVICE_URL:http://localhost:8081}
-              predicates:
-                - Path=/health/contract
-              filters:
-                - SetPath=/actuator/health
+Builds `NimbusJwtDecoder.withJwkSetUri(...)` and wraps the default validators with a
+`JwtIssuerValidator` for `app.security.issuer-uri`. The key-set URL and the issuer are
+deliberately independent so containers can fetch keys over the internal network while still
+validating the public issuer value. Default `jwk-set-uri` is
+`http://localhost:8083/oauth2/jwks`; Compose overrides it.
 
-            - id: ai-service-health
-              uri: ${AI_SERVICE_URL:http://localhost:8082}
-              predicates:
-                - Path=/health/ai
-              filters:
-                - SetPath=/actuator/health
-```
+### JwtRolesConverter
 
-### Route Summary Table
+Converts the flat `roles` claim (for example `["ANALYST"]`) into `ROLE_*` authorities. A
+missing claim or one that is not a collection yields no role authorities. The same class is
+duplicated in contract-service, ai-service and auth-service; it is not shared through
+`procuremind-common`, which deliberately carries no Spring dependency.
 
-| Route ID | Inbound Path Predicate | Filter Action | Target Downstream Service | Default Fallback URL |
-| :--- | :--- | :--- | :--- | :--- |
-| `contract-service-route` | `/api/contracts`, `/api/contracts/**` | None (Direct proxy) | Contract Service | `http://localhost:8081` |
-| `ai-service-route` | `/api/analysis`, `/api/analysis/**` | None (Direct proxy) | AI Service | `http://localhost:8082` |
-| `contract-service-health` | `/health/contract` | `SetPath=/actuator/health` | Contract Service Actuator | `http://localhost:8081/actuator/health` |
-| `ai-service-health` | `/health/ai` | `SetPath=/actuator/health` | AI Service Actuator | `http://localhost:8082/actuator/health` |
+### GatewayWelcomeController
 
----
+`GET /` returns an HTML landing page and `GET /api` returns a JSON route index. Both are
+public. This is the only controller in the module.
 
-## 6. Environment Variables
+## Multipart
 
-| Variable Name | Default Value | Description |
-| :--- | :--- | :--- |
-| `SERVER_PORT` | `8080` | HTTP port on which the API Gateway listens. |
-| `CONTRACT_SERVICE_URL` | `http://localhost:8081` | Base URL for downstream `contract-service` instances. |
-| `AI_SERVICE_URL` | `http://localhost:8082` | Base URL for downstream `ai-service` instances. |
+`spring.servlet.multipart.max-file-size` and `max-request-size` are 70MB. Nothing in the
+gateway reads the request body, which is what lets a large upload stream straight through to
+contract-service.
 
----
+## Testing
 
-## 7. Observability & Health Probes
-
-The gateway exposes its own health probes and proxies downstream service health:
-
-* **Gateway Health**: `GET http://localhost:8080/actuator/health`
-* **Proxied Contract Service Health**: `GET http://localhost:8080/health/contract`
-* **Proxied AI Service Health**: `GET http://localhost:8080/health/ai`
-
----
-
-## 8. How to Run
-
-### Prerequisites
-- Java 21 JDK installed.
-- Downstream services running (`contract-service` on port 8081, `ai-service` on port 8082).
-
-### Running Locally
-```bash
-./mvnw spring-boot:run
-```
-
-### Running with Custom Target URLs
-```bash
-CONTRACT_SERVICE_URL=http://localhost:8081 AI_SERVICE_URL=http://localhost:8082 ./mvnw spring-boot:run
-```
-
----
-
-## 9. Troubleshooting
-
-1. **`503 Service Unavailable` or `502 Bad Gateway`**:
-   - Verify downstream microservices are running on ports 8081 (`contract-service`) and 8082 (`ai-service`).
-   - Check target URL environment variables `CONTRACT_SERVICE_URL` and `AI_SERVICE_URL`.
-2. **Health endpoint returns 404**:
-   - Ensure downstream services have Spring Boot Actuator enabled on `/actuator/health`.
+`GatewaySecurityConfigTest` asserts the full role by endpoint matrix, that no `X-User-*`
+header authenticates anything, and that CORS preflight uses the explicit allow list.
+`GatewaySecurityKillSwitchTest` covers `AUTH_ENABLED=false`. Both pin the downstream URLs to a
+closed port so the assertions observe the gateway's own decision rather than whatever happens
+to be running locally.

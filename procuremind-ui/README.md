@@ -1,166 +1,119 @@
-# ProcureMind — Executive Dashboard UI (`procuremind-ui`)
+# procuremind-ui
 
-**ProcureMind UI** is an enterprise-grade SaaS web application built with **Python 3.13**, **Streamlit**, **Pandas**, **Plotly**, and **python-dotenv**. It serves as the primary user interface for corporate procurement officers, legal teams, and contract managers to monitor ingested agreements, analyze real-time financial risk exposure, explore contract section trees (TOC), and converse with an agentic AI assistant.
+## Purpose
 
----
+A Streamlit dashboard over the same gateway API as the React SPA. It is a server-side
+application: the Python process holds the session and makes the API calls, so the browser
+never talks to the gateway directly.
 
-## 1. System Architecture & BFF Integration
+## Technology
 
-In the ProcureMind microservices topology, `procuremind-ui` operates as a **Backend-For-Frontend (BFF)** client layer. It reads microservice gateway configurations from environment variables (`.env`) and consumes RESTful read models from the **API Gateway** (`http://localhost:8080`).
+Python 3.13, Streamlit, Pandas, Plotly, `requests`, `authlib` (`OAuth2Session`), managed with
+`uv` (`pyproject.toml`, `uv.lock`). Tests use pytest.
 
-```mermaid
-flowchart TD
-    User([👤 Procurement / Legal Officer])
-
-    subgraph UI Layer ["procuremind-ui (Port 8501)"]
-        ST["Streamlit Reactive Engine\n(main.py)"]
-        CQRS["CQRS In-Memory Data Merger"]
-    end
-
-    subgraph Edge Layer ["API Gateway / Edge Router"]
-        GW["API Gateway\n(Port 8080)"]
-    end
-
-    subgraph Microservices Layer ["Backend Services"]
-        CS["Contract Service\n(Port 8081)\n/api/contracts"]
-        AI["AI Intelligence Service\n(Port 8082)\n/api/analysis/*"]
-    end
-
-    User -->|Browser Session| ST
-    ST <--> CQRS
-    CQRS -->|GET /api/contracts| GW
-    CQRS -->|GET /api/analysis/{id}| GW
-    ST -->|POST /api/contracts/upload| GW
-    ST -->|POST /api/analysis/chat| GW
-    GW --> CS
-    GW --> AI
-```
-
----
-
-## 2. Structure
+## Files
 
 ```
-procuremind-ui/
-├── .env                      # Microservices gateway endpoint configuration
-├── .python-version           # Python version pin (3.13)
-├── Dockerfile                # Containerized UI image build definition
-├── pyproject.toml            # Project metadata & Python dependencies
-├── uv.lock                   # Reproducible lockfile for uv package manager
-├── README.md                 # Module documentation
-└── main.py                   # Streamlit application entry point & UI rendering logic
+main.py       the whole application: config, API helpers, five screens, router
+auth.py       OIDC login, token storage, refresh, logout, role helpers
+test_auth.py  unit tests for the pure helpers in auth.py
+Dockerfile    container image
 ```
 
----
+There is no package structure; `main.py` is a single module of render functions.
 
-## 3. Core Modules & Features
+## Entry point
 
-### 1. Executive BI Dashboard
-* **Executive KPI Cards**: Aggregates metrics (`/api/analysis/dashboard-metrics`): Total Ingested Contracts, High-Risk Contracts, and Average Risk Score.
-* **Financial Exposure Scatter Plot**: Interactive Plotly bubble chart plotting Contracts by Risk Score (1-10) vs Amount ($) using `/api/analysis/financial-exposure`.
-* **Risk Severity Donut Chart**: Severity breakdown (High = Red, Medium = Amber, Low = Emerald) using `/api/analysis/risks/distribution`.
-* **Master Contracts Data Grid**: Sortable table merging `/api/contracts` metadata with `/api/analysis/{contractId}` intelligence.
+`main()` at the bottom of `main.py`, invoked under `if __name__ == "__main__"`. In order it
+calls `oidc_auth.handle_callback()`, `oidc_auth.require_login()`, `render_header()`,
+`render_sidebar()` for the tab choice, `load_merged_contracts()`, then dispatches to one
+screen.
 
-### 2. Contract Ingestion Pipeline
-* **Drag-and-Drop Uploader**: Accepts `.pdf` agreements.
-* **Metadata Processing**: Inputs `vendorName`, Contract Type, and Contract Value ($).
-* **State Machine Polling**: POSTs `multipart/form-data` to `/api/contracts/upload` and polls `/api/contracts/{id}/status` through lifecycle state transitions (`UPLOADED` ➔ `INDEXED` ➔ `ANALYZED`).
+`st.set_page_config` runs at import time, before any rendering.
 
-### 3. Document Intelligence Deep Dive
-* **Hierarchical Structure (TOC)**: Collapsible section tree fetched from `/api/analysis/{contractId}/toc`.
-* **Legal Reading Pane**: Displays exact legal text and AI summaries from `/api/analysis/node/{nodeId}`.
-* **Identified Risks Panel**: Side panel listing flagged risks mapped from `/api/analysis/{contractId}/risks` with severity badges (`HIGH`, `MEDIUM`, `LOW`).
+## Screens
 
-### 4. Vendor Risk Portfolio
-* **Aggregated Exposure Matrix**: Groups contract commitments, average risk scores, and high-risk counts by vendor entity.
+| Sidebar entry | Function | Content |
+|---|---|---|
+| BI Dashboard | `render_dashboard(df)` | KPIs, financial exposure, risk distribution, recent contracts |
+| Document Intelligence | `render_document_intelligence(df)` | Table of contents, clause reading pane, identified risks |
+| Vendors Portfolio | `render_vendors_portfolio(df)` | Per-vendor aggregation |
+| Ingestion Pipeline | `render_upload_modal()` | Upload form. **Shown only when `can_write()`** |
+| ProcureMind AI Assistant | `render_agentic_chat_page()` | Chat against `/api/analysis/chat`. **Shown only when `can_write()`** |
 
-### 5. Agentic Chat Assistant
-* **Session Management**: Automatically provisions a persistent UUID `conversationId` per user session.
-* **Conversational AI API**: POSTs to `/api/analysis/chat` with `{ userMessage, conversationId }`.
-* **Transparent Agent Trace**: Renders markdown responses and an expandable `agentTrace` accordion detailing internal reasoning steps.
+The two write-capable entries are filtered out of the sidebar for a VIEWER, and the router
+re-checks `can_write()` before dispatching.
 
----
+## API layer
 
-## 4. API Endpoint Reference Matrix
+`GATEWAY_URL` defaults to `http://localhost:8080`; Compose sets it to
+`http://api-gateway:8080` because the call is server-side, not from the browser.
 
-| Feature Module | Endpoint Path | HTTP Verb | Forwarded Target | Description |
-| :--- | :--- | :---: | :--- | :--- |
-| **Contracts Master** | `/api/contracts` | `GET` | Contract Service (`:8081`) | Retrieves all ingested contract metadata records |
-| **Dashboard Metrics** | `/api/analysis/dashboard-metrics` | `GET` | AI Service (`:8082`) | Returns KPI counts (`totalAnalyzed`, `highRiskCount`, `averageRiskScore`) |
-| **Financial Exposure** | `/api/analysis/financial-exposure` | `GET` | AI Service (`:8082`) | Retrieves risk score vs financial commitment plot points |
-| **Risk Distribution** | `/api/analysis/risks/distribution` | `GET` | AI Service (`:8082`) | Severity distribution count breakdown |
-| **Contract Type Dist.**| `/api/analysis/contracts/type-distribution`| `GET` | AI Service (`:8082`) | Distribution of contracts by type (MSA, SOW, etc.) |
-| **Single Analysis** | `/api/analysis/{contractId}` | `GET` | AI Service (`:8082`) | Fetches AI risk score, summary, and recommendation |
-| **Contract TOC** | `/api/analysis/{contractId}/toc` | `GET` | AI Service (`:8082`) | Hierarchical Table of Contents tree nodes |
-| **Node Detail** | `/api/analysis/node/{nodeId}` | `GET` | AI Service (`:8082`) | Exact legal text and AI clause summary |
-| **Identified Risks** | `/api/analysis/{contractId}/risks` | `GET` | AI Service (`:8082`) | Categorized risk flags for a specific contract |
-| **Contract Upload** | `/api/contracts/upload` | `POST` | Contract Service (`:8081`) | Ingests PDF file with vendor metadata (`multipart/form-data`) |
-| **Status Polling** | `/api/contracts/{id}/status` | `GET` | Contract Service (`:8081`) | Checks ingestion status (`UPLOADED`, `INDEXED`, `ANALYZED`) |
-| **Agentic Chat** | `/api/analysis/chat` | `POST` | AI Service (`:8082`) | Interactive assistant query returning answer and `agentTrace` |
+| Function | Endpoint |
+|---|---|
+| `safe_get_api(endpoint)` | Shared GET helper: attaches `auth_headers()`, retries once after refresh on 401 |
+| `fetch_contracts_api()` | `GET /api/contracts` |
+| `fetch_dashboard_metrics_api()` | `GET /api/analysis/dashboard-metrics` |
+| `fetch_financial_exposure_api()` | `GET /api/analysis/financial-exposure` |
+| `fetch_risk_distribution_api()` | `GET /api/analysis/risks/distribution` |
+| `fetch_contract_analysis_api(id)` | `GET /api/analysis/{id}` |
+| `fetch_contract_toc_api(id)` | `GET /api/analysis/{id}/toc` |
+| `fetch_node_detail_api(node_id)` | `GET /api/analysis/node/{node_id}` |
+| `fetch_contract_risks_api(id)` | `GET /api/analysis/{id}/risks` |
+| `upload_contract_api(file, vendor_name, contract_type, amount)` | `POST /api/contracts/upload` |
+| `check_status_api(id)` | `GET /api/contracts/{id}/status` |
+| `send_chat_api(user_message, conversation_id)` | `POST /api/analysis/chat` |
 
----
+`load_merged_contracts()` joins `/api/contracts` with per-contract `/api/analysis/{id}` into a
+Pandas DataFrame, the same client-side CQRS merge the React app does.
 
-## 5. Environment Configuration (`.env`)
+## Authentication
 
-Create a `.env` file in `procuremind-ui/`:
+`auth.py` implements Authorization Code with PKCE for a **confidential** client using
+`authlib`. Unlike the React client it has a secret, which is safe because the exchange happens
+server-side.
 
-```env
-# API Gateway Base URL
-GATEWAY_URL=http://localhost:8080
-API_TIMEOUT=120
-```
+| Constant | Default | Why |
+|---|---|---|
+| `BROWSER_ISSUER` | `http://localhost:8083` | Used for `/oauth2/authorize` and `/connect/logout`, which the browser follows |
+| `INTERNAL_ISSUER` | `http://auth-service:8083` | Used for `/oauth2/token` and `/userinfo`, called server-side |
+| `CLIENT_ID` | `procuremind-streamlit` | |
+| `CLIENT_SECRET` | empty | Must be set, or auth-service never registers the client |
+| `REDIRECT_URI` | `http://localhost:8501/` | Registered with auth-service |
+| `AUTH_REQUIRED` | `true` | `"false"` skips the login gate |
 
----
+Splitting the issuer in two is the point: the browser must be sent to a URL it can resolve,
+while the token exchange stays on the container network.
 
-## 6. Setup & Execution Guide
+| Function | Purpose |
+|---|---|
+| `login_url()` | Builds the authorize URL with a PKCE challenge and records the verifier |
+| `handle_callback()` | Exchanges `?code=` for tokens, stores them, fetches userinfo |
+| `require_login()` | Renders the sign-in gate and calls `st.stop()` unless a token is present |
+| `get_access_token()` | Returns a valid token, refreshing first if it is close to expiry |
+| `auth_headers()` | `{"Authorization": "Bearer ..."}` or `{}` |
+| `refresh_or_relogin()` | Refresh once; on failure clear the session and rerun into the gate |
+| `current_user()`, `current_roles()`, `can_write()` | Role helpers; `can_write()` is true for ANALYST or ADMIN |
+| `logout_url()`, `logout()` | RP-initiated logout with `id_token_hint`, then clear local state |
 
-### Prerequisites
-* **Python 3.13+** installed.
-* **uv** (Recommended) or standard `pip` / `venv`.
-* Backend microservices running via `docker-compose` or local Java processes.
+Tokens live in `st.session_state` under the `_oidc_*` keys and never reach the browser.
+`_PENDING` holds in-flight PKCE verifiers with a 600 second TTL and a 50 entry cap.
 
-### Option A: Running with `uv` (Recommended)
+Unlike the React client, the confidential Streamlit client **does** receive a refresh token,
+which is why `_refresh()` exists here and silent renew does not.
+
+## Running
 
 ```bash
-cd procuremind-ui
-
-# Install dependencies and sync environment
 uv sync
-
-# Launch ProcureMind Streamlit UI
-uv run streamlit run main.py
+uv run streamlit run main.py          # http://localhost:8501
+uv run --with pytest python -m pytest -q
 ```
 
-### Option B: Running with standard `pip` & `venv`
+In Compose the container is built from `Dockerfile` and published on 8501.
 
-```bash
-cd procuremind-ui
+## Not clearly established
 
-# Create virtual environment
-python -m venv .venv
-
-# Activate environment (Windows PowerShell)
-.venv\Scripts\Activate.ps1
-
-# Activate environment (Linux / macOS)
-source .venv/bin/activate
-
-# Install dependencies
-pip install -e .
-
-# Run Streamlit
-streamlit run main.py
-```
-
-### Accessing the Dashboard
-Open your browser and navigate to `http://localhost:8501`.
-
----
-
-## 7. Troubleshooting
-
-1. **"Unable to connect to API Gateway" warnings**:
-   - Verify the API Gateway is running on `http://localhost:8080`.
-   - Check that `GATEWAY_URL` in `.env` matches the active gateway host and port.
-2. **Chat request timeout**:
-   - For complex LLM queries on CPU-only machines, increase `API_TIMEOUT` in `.env` (e.g. `API_TIMEOUT=180`).
+The Dockerfile installs its Python dependencies directly rather than from `pyproject.toml` and
+`uv.lock`, so the container and a local `uv sync` can drift. Whether that is deliberate is not
+clearly established from the current implementation.

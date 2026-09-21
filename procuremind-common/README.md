@@ -1,139 +1,52 @@
-# ProcureMind — Common Shared Library (`procuremind-common`)
+# procuremind-common
 
-**ProcureMind Common** is the foundational shared Maven library containing cross-service Data Transfer Objects (DTOs) and event contract definitions for the ProcureMind microservices platform.
+## Purpose
 
----
+Carries the two Kafka event records shared by contract-service and ai-service. Nothing else.
 
-## 1. Purpose & Architectural Role
-
-In an asynchronous event-driven architecture, microservices must share immutable event contracts without introducing tight compile-time coupling between domain services. `procuremind-common` fulfills this role by establishing a centralized schema repository for Apache Kafka event payloads.
-
-Both `contract-service` and `ai-service` import `procuremind-common` as a Maven dependency:
-
-```mermaid
-graph TD
-    COMMON["procuremind-common\n(Event Contracts & DTOs)"]
-    CS["contract-service\n(Producer & Consumer)"]
-    AI["ai-service\n(Producer & Consumer)"]
-
-    CS -->|Imports Payload Schemas| COMMON
-    AI -->|Imports Payload Schemas| COMMON
-```
-
----
-
-## 2. Structure
+## What is in it
 
 ```
-procuremind-common/
-├── pom.xml                                   # Maven build configuration
-├── README.md                                 # Module documentation
-└── src/
-    └── main/
-        └── java/com/procuremind/
-            ├── Main.java                     # Library entry placeholder
-            └── common/
-                └── dto/
-                    ├── ContractUploadedEvent.java # Kafka event record for new contract uploads
-                    └── PageIndexedEvent.java      # Kafka event record for indexing/analysis transitions
+com/procuremind/
+├── Main.java                      no-op class, not used by any service
+└── common/dto/
+    ├── ContractUploadedEvent.java
+    └── PageIndexedEvent.java
 ```
-
----
-
-## 3. Event Contracts & Data Transfer Objects
-
-All event contracts are modeled as immutable Java **Records** for thread safety, concise syntax, and seamless JSON serialization via Jackson and Spring Kafka.
-
-### 1. `ContractUploadedEvent` (`src/main/java/com/procuremind/common/dto/ContractUploadedEvent.java`)
-* **Produced By**: `contract-service` (`ContractEventProducer`)
-* **Consumed By**: `ai-service` (`ContractEventListener`)
-* **Kafka Topic**: `contract.uploaded`
-* **Purpose**: Emitted immediately after a contract file is successfully uploaded to MinIO object storage and saved in PostgreSQL.
 
 ```java
-package com.procuremind.common.dto;
-
-import java.util.UUID;
-
-public record ContractUploadedEvent(
-        UUID contractId,
-        String filename,
-        String minioObjName
-) {}
+public record ContractUploadedEvent(UUID contractId, String filename, String minioObjName) {}
+public record PageIndexedEvent(UUID contractId, String status) {}
 ```
 
-#### Field Description
-* `contractId`: Unique UUID generated for the uploaded contract entity.
-* `filename`: Original filename of the uploaded PDF file.
-* `minioObjName`: Key/object identifier assigned to the file inside the MinIO bucket `procuremind-contracts`.
+| Record | Topic | Produced by | Consumed by |
+|---|---|---|---|
+| `ContractUploadedEvent` | `contract.uploaded` | contract-service | ai-service |
+| `PageIndexedEvent` | `contract.indexed` | ai-service | ai-service, contract-service |
+| `PageIndexedEvent` | `contract.analyzed` | ai-service | contract-service |
+| `PageIndexedEvent` | `contract.failed` | ai-service error recoverer | contract-service |
 
----
+`PageIndexedEvent.status` carries a string that differs by topic: `"INDEXED"` for
+`contract.indexed`, `"ANALYSIS_COMPLETED"` for `contract.analyzed`, `"FAILED"` for
+`contract.failed`. Consumers do not branch on it; they derive the new status from the topic
+the listener is bound to.
 
-### 2. `PageIndexedEvent` (`src/main/java/com/procuremind/common/dto/PageIndexedEvent.java`)
-* **Produced By**: `ai-service` (`ContractEventProducer`)
-* **Consumed By**: `contract-service` & `ai-service` (`ContractEventListener`)
-* **Kafka Topics**: `contract.indexed`, `contract.analyzed`
-* **Purpose**: Emitted by `ai-service` upon completing document section indexing or contract AI analysis to propagate state transitions.
+## Why it has no dependencies
 
-```java
-package com.procuremind.common.dto;
+The POM declares **no parent and no dependencies**. That is deliberate. contract-service runs
+on Spring Boot 4.0.7 and ai-service on 3.5.14, so anything Spring-flavoured added here would
+force one version onto both. Keep it plain Java.
 
-import java.util.UUID;
+This is also why `JwtRolesConverter` is duplicated in each service instead of living here.
 
-public record PageIndexedEvent(
-        UUID contractId,
-        String status
-) {}
-```
+## Changing these records is a breaking change
 
-#### Field Description
-* `contractId`: Unique UUID of the contract document undergoing processing.
-* `status`: Processing state marker (`INDEXED` or `ANALYSIS_COMPLETED`).
+Both services deserialise these types from Kafka JSON, gated by
+`spring.json.trusted.packages: "com.procuremind.*"`. Renaming a field, changing a type or
+moving the package breaks deserialisation in both services at once, and any messages already
+on a topic become unreadable. There is no schema registry and no versioning strategy.
 
----
+## Build
 
-## 4. Module Boundaries & Design Constraints
-
-To maintain loose coupling and prevent architectural erosion, `procuremind-common` adheres to strict architectural boundaries:
-
-### Allowed Content
-✓ Immutable Java records and DTO contracts.  
-✓ Shared system constants and event topic name definitions.  
-✓ Custom exception types shared across domain boundaries.  
-
-### Prohibited Content (Anti-Patterns)
-❌ **Zero Business Logic**: No `@Service`, `@Component`, or business processing logic.  
-❌ **Zero Database Dependencies**: No JPA entities, `@Table` annotations, or ORM mappings.  
-❌ **Zero Infrastructure Beans**: No Kafka listener definitions, Web MVC controllers, or Spring Security configurations.  
-
----
-
-## 5. Integration Guide
-
-### 1. Add Maven Dependency
-
-```xml
-<dependency>
-    <groupId>com.procuremind</groupId>
-    <artifactId>procuremind-common</artifactId>
-    <version>1.0-SNAPSHOT</version>
-</dependency>
-```
-
-### 2. Configure Kafka Trusted Packages
-
-Ensure downstream Spring Boot `application.yaml` files trust the `com.procuremind.*` package namespace for Kafka `JsonDeserializer`:
-
-```yaml
-spring:
-  kafka:
-    properties:
-      spring.json.trusted.packages: "com.procuremind.*"
-```
-
-### 3. Local Installation to Maven Repository
-
-```bash
-cd procuremind-common
-./mvnw clean install -DskipTests
-```
+A module of the root reactor, built before contract-service and ai-service.
+`src/test` exists but is empty.
