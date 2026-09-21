@@ -20,6 +20,7 @@ import com.nimbusds.jose.proc.SecurityContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.util.StringUtils;
 
 /**
@@ -29,32 +30,46 @@ import org.springframework.util.StringUtils;
  * <ul>
  *   <li>When {@code auth.jwk.keystore-path} points at a readable PKCS12 file, the key is
  *       loaded from it — this is the persistent, production/compose path.</li>
- *   <li>Otherwise an in-memory RSA-2048 key is generated with the configured, stable
- *       {@code kid}. This keeps local runs and tests self-contained; tokens do not
- *       survive a restart. A warning is logged.</li>
+ *   <li>Otherwise, if the {@code dev} Spring profile is active, an in-memory RSA-2048 key is
+ *       generated with the configured, stable {@code kid}. This keeps local runs and tests
+ *       self-contained; tokens do not survive a restart. A warning is logged.</li>
+ *   <li>Otherwise (no keystore, and {@code dev} not active) startup fails fast with an
+ *       {@link IllegalStateException}, since silently issuing tokens from a key that won't
+ *       survive a restart would invalidate every session without warning.</li>
  * </ul>
  */
 @Slf4j
 @Configuration(proxyBeanMethods = false)
 public class JwkKeyConfig {
 
+    private static final String DEV_PROFILE = "dev";
+
     @Bean
-    public JWKSource<SecurityContext> jwkSource(AuthProperties properties) {
-        RSAKey rsaKey = buildRsaKey(properties.getJwk());
+    public JWKSource<SecurityContext> jwkSource(AuthProperties properties, Environment environment) {
+        RSAKey rsaKey = buildRsaKey(properties.getJwk(), environment);
         return new ImmutableJWKSet<>(new JWKSet(rsaKey));
     }
 
-    private RSAKey buildRsaKey(AuthProperties.Jwk jwk) {
+    private RSAKey buildRsaKey(AuthProperties.Jwk jwk, Environment environment) {
         String keystorePath = jwk.getKeystorePath();
         if (StringUtils.hasText(keystorePath) && Files.isReadable(Path.of(keystorePath))) {
             return loadFromKeystore(jwk);
         }
-        if (StringUtils.hasText(keystorePath)) {
-            log.warn("auth.jwk.keystore-path='{}' is not readable; falling back to an in-memory signing key", keystorePath);
-        } else {
-            log.warn("No auth.jwk.keystore-path configured; generating a NON-PERSISTENT in-memory RSA signing key "
-                    + "(kid='{}'). Set AUTH_JWK_KEYSTORE_PATH for a stable key across restarts.", jwk.getKeyId());
+
+        String reason = StringUtils.hasText(keystorePath)
+                ? "auth.jwk.keystore-path='" + keystorePath + "' is not readable"
+                : "no auth.jwk.keystore-path is configured";
+
+        if (!environment.matchesProfiles(DEV_PROFILE)) {
+            throw new IllegalStateException(reason + ", and the '" + DEV_PROFILE + "' Spring profile is not "
+                    + "active. Refusing to start with a non-persistent signing key: every restart would silently "
+                    + "invalidate every issued token/session. Generate a keystore with "
+                    + "scripts/gen-auth-keystore.sh and set AUTH_JWK_KEYSTORE_PATH, or activate the '"
+                    + DEV_PROFILE + "' profile (SPRING_PROFILES_ACTIVE=dev) for local-only runs.");
         }
+
+        log.warn("{}; generating a NON-PERSISTENT in-memory RSA signing key (kid='{}') because the '{}' profile "
+                + "is active. Tokens will not survive a restart.", reason, jwk.getKeyId(), DEV_PROFILE);
         return generateInMemory(jwk.getKeyId());
     }
 

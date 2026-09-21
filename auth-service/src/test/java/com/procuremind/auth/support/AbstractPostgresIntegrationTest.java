@@ -1,6 +1,7 @@
 package com.procuremind.auth.support;
 
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -16,8 +17,13 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * {@code @Container}: several test classes share this base and Spring's context cache, so a
  * per-class container lifecycle would leave a cached context pointing at a stopped
  * container.
+ *
+ * <p>The {@code dev} profile is active here because these tests run with no JWK keystore
+ * configured (see {@code auth.jwk.keystore-path} below); {@link com.procuremind.auth.config.JwkKeyConfig}
+ * fails fast on a missing keystore outside that profile.
  */
 @SpringBootTest
+@ActiveProfiles("dev")
 public abstract class AbstractPostgresIntegrationTest {
 
     protected static final String ADMIN_USERNAME = "admin";
