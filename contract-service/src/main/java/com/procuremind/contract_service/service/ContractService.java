@@ -24,10 +24,11 @@ public class ContractService {
 
     @Transactional
     public ContractResponseDto processNewContract(MultipartFile file, String vendorName) throws Exception {
-        String objName = storageService.uploadFile(file);
+        String sanitizedFilename = sanitizeFilename(file.getOriginalFilename());
+        String objName = storageService.uploadFile(file, sanitizedFilename);
 
         Contract contract = Contract.builder()
-                .filename(file.getOriginalFilename())
+                .filename(sanitizedFilename)
                 .minioObjectName(objName)
                 .vendorName(vendorName)
                 .status("UPLOADED")
@@ -43,6 +44,11 @@ public class ContractService {
         );
 
         return mapTo(contract);
+    }
+
+    private String sanitizeFilename(String originalFilename) {
+        String base = (originalFilename == null || originalFilename.isBlank()) ? "unnamed" : originalFilename;
+        return base.replaceAll("[^a-zA-Z0-9._-]", "_");
     }
 
     @Transactional(readOnly = true)

@@ -13,6 +13,8 @@ RUN mvn clean package -f ./auth-service/pom.xml -DskipTests
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
+RUN apk add --no-cache curl
+
 COPY --from=builder /build/auth-service/target/*.jar app.jar
 
 EXPOSE 8083

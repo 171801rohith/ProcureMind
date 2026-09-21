@@ -18,7 +18,7 @@ public class StorageService {
     private final MinioClient minioClient;
     private static final String BUCKET_NAME = "procuremind-contracts";
 
-    public String uploadFile(MultipartFile file) throws Exception {
+    public String uploadFile(MultipartFile file, String sanitizedFilename) throws Exception {
         boolean found = minioClient.bucketExists(
                 BucketExistsArgs.builder().bucket(BUCKET_NAME).build()
         );
@@ -27,7 +27,7 @@ public class StorageService {
             log.info("Created new MINIO bucket: {}", BUCKET_NAME);
         }
 
-        String objName = UUID.randomUUID() + "_" + file.getOriginalFilename();
+        String objName = UUID.randomUUID() + "_" + sanitizedFilename;
         minioClient.putObject(
                 PutObjectArgs.builder()
                         .bucket(BUCKET_NAME)

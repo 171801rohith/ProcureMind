@@ -22,6 +22,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
 
   minio:
     image: minio/minio
@@ -41,6 +46,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
 
   kafka:
     image: confluentinc/cp-kafka:7.4.4
@@ -67,6 +77,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1.5G
 
 
   kafka-ui:
@@ -82,6 +97,11 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
 
   # ---------------------------------------------------------------------------
   # 2. BACKEND MICROSERVICES
@@ -107,6 +127,17 @@ services:
       AUTH_ENABLED: "true"
       AUTH_ISSUER_URI: http://localhost:8083
       AUTH_JWK_SET_URI: http://auth-service:8083/oauth2/jwks
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,6 +175,17 @@ services:
       AUTH_JWK_SET_URI: http://auth-service:8083/oauth2/jwks
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,15 +213,27 @@ services:
       REACT_OIDC_SILENT_REDIRECT_URI: ${REACT_OIDC_SILENT_REDIRECT_URI:-http://localhost:5173/silent-renew.html}
       STREAMLIT_OIDC_REDIRECT_URI: ${STREAMLIT_OIDC_REDIRECT_URI:-http://localhost:8501/}
       STREAMLIT_OIDC_CLIENT_SECRET: ${STREAMLIT_OIDC_CLIENT_SECRET:-}
-      # Persistent token-signing key (optional). Generate it with scripts/gen-auth-keystore.sh,
-      # then uncomment the four vars below and the volume mount. Without a keystore, auth-service
-      # uses a NON-PERSISTENT in-memory RSA key (dev only; tokens do not survive a restart).
-      # AUTH_JWK_KEYSTORE_PATH: /app/keys/auth-signing.p12
-      # AUTH_JWK_KEYSTORE_PASSWORD: ${AUTH_JWK_KEYSTORE_PASSWORD:-changeit}
-      # AUTH_JWK_KEY_ALIAS: ${AUTH_JWK_KEY_ALIAS:-auth-signing}
-      # AUTH_JWK_KEY_ID: ${AUTH_JWK_KEY_ID:-auth-signing}
-    # volumes:
-    #   - ./auth-service/keys/auth-signing.p12:/app/keys/auth-signing.p12:ro
+      # Persistent token-signing key. REQUIRED: run scripts/gen-auth-keystore.sh once before
+      # `docker compose up` — auth-service now fails fast at startup (see JwkKeyConfig /
+      # issue #10) if this keystore is missing or unreadable, instead of silently falling
+      # back to a non-persistent key.
+      AUTH_JWK_KEYSTORE_PATH: /app/keys/auth-signing.p12
+      AUTH_JWK_KEYSTORE_PASSWORD: ${AUTH_JWK_KEYSTORE_PASSWORD:-changeit}
+      AUTH_JWK_KEY_ALIAS: ${AUTH_JWK_KEY_ALIAS:-auth-signing}
+      AUTH_JWK_KEY_ID: ${AUTH_JWK_KEY_ID:-auth-signing}
+    volumes:
+      - ./auth-service/keys/auth-signing.p12:/app/keys/auth-signing.p12:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     depends_on:
       postgres:
         condition: service_healthy
@@ -200,13 +254,18 @@ services:
       AUTH_ENABLED: "true"
       AUTH_ISSUER_URI: http://localhost:8083
       AUTH_JWK_SET_URI: http://auth-service:8083/oauth2/jwks
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
     depends_on:
       contract-service:
-        condition: service_started
+        condition: service_healthy
       ai-service:
-        condition: service_started
+        condition: service_healthy
       auth-service:
-        condition: service_started
+        condition: service_healthy
 
   # ---------------------------------------------------------------------------
   # 3. FRONTEND UI
@@ -233,7 +292,7 @@ services:
       api-gateway:
         condition: service_started
       auth-service:
-        condition: service_started
+        condition: service_healthy
 
   procuremind-react:
     build:
@@ -261,7 +320,7 @@ services:
       api-gateway:
         condition: service_started
       auth-service:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:

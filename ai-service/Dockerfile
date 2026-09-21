@@ -16,6 +16,8 @@ RUN mvn clean package -f ./ai-service/pom.xml -DskipTests
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
+RUN apk add --no-cache curl
+
 COPY --from=builder /build/ai-service/target/*.jar app.jar
 
 EXPOSE 8082
