@@ -9,7 +9,7 @@ auth-service.
 ## Technology
 
 React 19, Vite, Tailwind CSS v4, Recharts, lucide-react, `oidc-client-ts` with
-`react-oidc-context`, oxlint, Vitest.
+`react-oidc-context`, `jspdf` + `jspdf-autotable` (client-side PDF export), oxlint, Vitest.
 
 ## Entry point and shell
 
@@ -44,13 +44,14 @@ src/
 ├── context/      AppContext, the only global state
 ├── components/
 │   ├── layout/       Header, Sidebar
-│   ├── dashboard/    KPI and chart widgets
-│   ├── intelligence/ TOC, reading pane, risk side panel
+│   ├── dashboard/    KPI and chart widgets, RecentContractsTable ("Export CSV")
+│   ├── intelligence/ TOC, reading pane, risk side panel, IntelligenceScreen ("Export PDF")
 │   ├── vendors/      VendorPortfolio
 │   ├── chat/         ChatInterface
 │   ├── upload/       UploadModal
 │   ├── admin/        UserManagement, Unauthorized
 │   └── ui/           Button, Card, Modal, Badge, Skeleton, EmptyState
+├── utils/        exportUtils.js — CSV/PDF export (see below)
 └── index.css
 ```
 
@@ -145,6 +146,28 @@ It also keeps the API client's token in sync and installs the expiry handler, wh
 3. `handleSubmit` returns early if no file, then calls `ApiClient.uploadContract`, polls
    `checkContractStatus` once, calls `refreshData()` and closes.
 4. Any thrown error sets the message `"Upload failed. Check gateway connection."`
+
+## Export/reporting
+
+Implements the "Export/reporting (PDF/CSV)" item from `ARCHITECTURE_REVIEW.md`. Both exports
+are client-side only — no dedicated backend endpoint — built from data the app has already
+fetched.
+
+`src/utils/exportUtils.js`:
+
+| Function | Used from | Produces |
+|---|---|---|
+| `exportContractsToCsv(contracts)` | `RecentContractsTable`'s "Export CSV" button | The currently filtered/visible rows (vendor, file name, type, status, risk score, value, recommendation, uploaded date) as an RFC-4180-escaped CSV, downloaded via `Blob` + a synthetic `<a download>` click. Hand-rolled escaping, not a library — the rules needed (comma/quote/newline) are small |
+| `exportContractAnalysisToPdf(contract, risks)` | `IntelligenceScreen`'s "Export PDF" button | A one-page report for the currently selected contract — vendor, file, type, status, value, risk score, uploaded date, recommendation, summary, and a risks table via `jspdf-autotable` — via `jsPDF`, saved directly with `doc.save(...)` |
+
+Both buttons disable themselves (with an explanatory `title` tooltip) when there's nothing to
+export: an empty contracts list, or no contract currently selected on the Intelligence screen.
+
+Because `contractType`/`amount`/`summary` on the merged-contracts shape depend on the backend
+DTO fields ai-service's `AnalysisResponseDto`/`FinancialExposureDto` expose (see
+`ai-service/README.md` and finding #11), both export paths read them with `?? fallback`
+defaults (`"Agreement"`, `$0`, `"No summary available."`) so they degrade gracefully rather
+than breaking regardless of backend rollout order.
 
 ## Build and run
 

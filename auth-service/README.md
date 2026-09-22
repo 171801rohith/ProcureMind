@@ -18,11 +18,13 @@ parsing anywhere in this repository.
 - Add a `roles` claim to access and id tokens
 - Register and reconcile the two OAuth2 clients on start
 - Serve `GET/POST/DELETE /api/users` for administrators
+- Rate-limit `POST /login` and `POST /oauth2/token` per-IP and per-identity, in-memory
 
 ## Technology
 
 Java 21, Spring Boot 4.0.7, Spring Authorization Server, Spring Security, Spring Web MVC,
-Spring Data JPA, Thymeleaf (login page only), Flyway, PostgreSQL, Lombok.
+Spring Data JPA, Thymeleaf (login page only), Flyway, PostgreSQL, Lombok, Bucket4j + Caffeine
+(in-memory rate limiting, no Redis — see below).
 
 ## Entry point
 
@@ -53,7 +55,9 @@ com/procuremind/auth/
 ├── repository/  User and Role repositories
 ├── entity/      User, Role
 ├── dto/         UserDtos
-└── security/    JwtRolesConverter
+└── security/
+    ├── JwtRolesConverter
+    └── ratelimit/   RateLimiterService, RateLimitFilter
 ```
 
 ---
@@ -104,6 +108,41 @@ Public: `/actuator/health*`, `/actuator/info`, `/login`, `/error`, `/css/**`,
 
 Scopes itself to `/api/**` and treats this service as a resource server for the tokens it
 issues. `/api/users/**` requires `hasRole("ADMIN")`. Stateless, CSRF disabled.
+
+### Rate limiting
+
+**Location:** `security/ratelimit/RateLimiterService.java`, `RateLimitFilter.java`,
+`config/RateLimitFilterConfig.java`, `config/AuthProperties.RateLimit`
+
+Implements `ARCHITECTURE_REVIEW.md` finding #5: no attempt counter, backoff, or lockout
+previously existed on `/login` or `/oauth2/token`.
+
+| Class | Role |
+|---|---|
+| `RateLimiterService` | A Spring-free wrapper around Bucket4j + Caffeine: an in-memory `Cache<String, Bucket>` with a greedy-refill bucket per key. No Redis — a distributed store isn't warranted for a single instance |
+| `RateLimitFilter` | An `OncePerRequestFilter` matching `POST /login` and `POST /oauth2/token`. Checks a per-IP bucket, then a per-identity bucket; either exceeded rejects with a generic 429 JSON body before the request reaches real authentication |
+| `RateLimitFilterConfig` | Publishes the single shared `RateLimitFilter` bean |
+
+Two independent limits, both in `auth.rate-limit.*` (env-var overrides `AUTH_RATE_LIMIT_*`):
+
+| Dimension | Default | Why |
+|---|---|---|
+| `ip.{capacity,period}` | 20/minute | A coarse flood backstop — one IP can legitimately front several users (NAT, shared office network) |
+| `identity.{capacity,period}` | 5/minute | The primary brute-force defense — tolerates a genuine typo or two, throttles credential stuffing against one account |
+
+Identity is the `username` form field for `/login`; for `/oauth2/token` it's the OAuth2 client
+id, read from HTTP Basic credentials (confidential clients, e.g. `procuremind-streamlit`) or
+the `client_id` parameter (the public `procuremind-react` client, which has no secret).
+
+**Deliberately does not trust `X-Forwarded-For`.** `api-gateway` doesn't proxy `/login` or
+`/oauth2/token` — browsers hit them on auth-service directly — so trusting a client-supplied
+header here would let an attacker spoof a fresh IP per request and bypass the IP limit
+entirely. `request.getRemoteAddr()` is used instead; revisit if a reverse proxy is ever placed
+in front of auth-service itself (e.g. via `ForwardedHeaderFilter` with a trusted-proxy count).
+
+One shared `RateLimitFilter` instance (and its underlying Caffeine caches) is wired into
+**both** `DefaultSecurityConfig` (owns `/login`) and `AuthorizationServerConfig` (owns
+`/oauth2/token`), since each chain only sees the requests its own `securityMatcher` selects.
 
 ### JwkKeyConfig
 
@@ -209,8 +248,14 @@ Keeping the two separate is deliberate; do not derive one from the other.
 
 ## Testing
 
-`LoginPageControllerTest` and `UserAdminControllerTest` are web slices that need no database.
-`TokenClaimsCustomizerTest` includes a round-trip through the same Jackson configuration the
-JDBC authorization service uses, which is the regression guard for the logout bug.
-`AuthServiceApplicationTests`, `LoginPageTest` and `RegisteredClientSeedTest` use Testcontainers
-and need Docker.
+46 tests, all green (`./mvnw -pl auth-service test`). `LoginPageControllerTest` and
+`UserAdminControllerTest` are web slices that need no database. `TokenClaimsCustomizerTest`
+includes a round-trip through the same Jackson configuration the JDBC authorization service
+uses, which is the regression guard for the logout bug. `AuthServiceApplicationTests`,
+`LoginPageTest` and `RegisteredClientSeedTest` use Testcontainers and need Docker.
+`security/ratelimit/RateLimiterServiceTest` (5 tests) covers the bucket/refill logic with no
+Spring context; `security/ratelimit/RateLimitFilterIntegrationTest` (6 tests, real MockMvc +
+Postgres context) proves the identity limit trips independently per username, the IP limit
+trips across usernames sharing one IP, IP-rotation can't bypass the per-identity limit
+(same username from different IPs still shares one budget), under-limit traffic is unaffected,
+and the token-endpoint identity limit also trips.

@@ -2,17 +2,37 @@
 
 ## Purpose
 
-Carries the two Kafka event records shared by contract-service and ai-service. Nothing else.
+Carries the two Kafka event records shared by contract-service and ai-service, plus the
+correlation-id constants both use to tie a contract's logs together across services.
 
 ## What is in it
 
 ```
 com/procuremind/
 ├── Main.java                      no-op class, not used by any service
-└── common/dto/
-    ├── ContractUploadedEvent.java
-    └── PageIndexedEvent.java
+└── common/
+    ├── dto/
+    │   ├── ContractUploadedEvent.java
+    │   └── PageIndexedEvent.java
+    └── tracing/
+        └── CorrelationIds.java
 ```
+
+`CorrelationIds` (added per `ARCHITECTURE_REVIEW.md` finding #9) is two `public static final
+String` constants and nothing else — no framework dependency, matching this module's own
+no-dependencies rule below:
+
+```java
+public static final String HEADER = "X-Contract-Id";   // Kafka record header
+public static final String MDC_KEY = "contractId";     // MDC key each consumer restores it into
+```
+
+Both services' `ContractEventProducer`s stamp the contract id onto every outgoing record as
+this header (in addition to it already being the record key); both services'
+`ContractEventListener`s extract it via `@Header(value = CorrelationIds.HEADER, required =
+false)` and restore it into MDC for the duration of processing, so one contract's whole
+journey — upload through analysis, across all four services — can be grepped by one id instead
+of manually correlating timestamps.
 
 ```java
 public record ContractUploadedEvent(UUID contractId, String filename, String minioObjName) {}

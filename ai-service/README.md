@@ -28,13 +28,30 @@ The LLM is a local **Ollama** server reached through its OpenAI-compatible API. 
 comes from `AI_BASE_URL`, `AI_API_KEY` and `AI_MODEL`, none of which have defaults, so the
 service will not start without them.
 
+**The Ollama call is bounded.** `spring.http.client.connect-timeout` (10s) and `read-timeout`
+(18m) in `application.yaml` configure Boot's auto-configured `RestClient.Builder` bean, which
+is exactly what Spring AI's `OpenAiChatAutoConfiguration` consumes for `OpenAiApi` — so a hung
+call now fails within 18 minutes instead of blocking the Kafka consumer thread indefinitely
+(previously unbounded, and capable of stalling the pipeline for up to ~90 minutes across 3
+Kafka delivery attempts). A second property is required alongside it and easy to miss:
+`spring.ai.retry.max-attempts: 1`. Spring AI's own retry layer retries exactly the exception a
+read-timeout throws (`ResourceAccessException`), by default up to 10 times with exponential
+backoff — left at that default, it would have silently multiplied the 18-minute bound by up to
+10x. Capping it at 1 leaves Kafka's own 3-attempt/backoff envelope as the only retry layer, as
+originally intended. See `ARCHITECTURE_REVIEW.md` finding #2 and
+`src/test/java/.../config/OllamaHttpTimeoutTest.java`.
+
 ## Entry point
 
 `src/main/java/com/procuremind/ai_service/AiServiceApplication.java`, a plain
-`@SpringBootApplication`. Port 8082. On start, Flyway applies
-`db/migration/V1__init_schema.sql` and `V2__page_index_node_indexes.sql` to `procuremind_db`.
-**V1 also creates the `contracts` table that contract-service owns**, so ai-service must
-migrate before either service can pass `ddl-auto: validate`.
+`@SpringBootApplication`. Port 8082. On start, Flyway applies `db/migration/V1__init_schema.sql`,
+`V2__page_index_node_indexes.sql` and `V3__index_parent_node_and_analysis_fk.sql` to
+`procuremind_db`, recorded in the default `flyway_schema_history` table. **V1 historically also
+created the `contracts` table** that contract-service writes; that file is checksum-locked and
+was left unchanged. contract-service now owns that table's DDL going forward, in its own
+separate `flyway_schema_history_contract` table — see `contract-service/README.md` and
+`ARCHITECTURE_REVIEW.md` finding #16. Because the two services no longer share a history table,
+there is **no migration-ordering dependency between them** either way.
 
 ## Package structure
 
@@ -103,6 +120,7 @@ Structure detection is pure regex over lines shorter than 150 characters:
 |---|---|
 | `ARTICLE_PATTERN` `^ARTICLE\s+([IVXLCDM]+|\d+)...` | `ARTICLE` node at level 2, parented to ROOT |
 | `SECTION_PATTERN` `^(\d+(?:\.\d+)+)...` | `SECTION` node at level `dots + 1`, parented to the nearest node one level up |
+| `FLAT_SECTION_PATTERN` `^(\d+)...` | Fallback, tried only when `SECTION_PATTERN` fails: a flat, single-level heading like `"1. Definitions"` (no dotted sub-level) is still indexed as its own `SECTION` node instead of silently falling into the previous node's body text. Fixed per `ARCHITECTURE_REVIEW.md` finding #20 |
 | `NOISE_PATTERN` page numbers | Dropped |
 
 Everything that is not a heading is buffered into the current node's `rawContext`. A ROOT node
@@ -214,6 +232,18 @@ error that the model answered by repeating the same call.
 | `getContractTypeDistribution()` | `GET /api/analysis/contracts/type-distribution` |
 | `compareContracts(List<UUID>)` | `GET /api/analysis/compare` |
 
+**DTO fields added for the frontend (`ARCHITECTURE_REVIEW.md` finding #11).**
+`FinancialExposureDto` gained `vendorName`/`fileName`, a genuine same-database join via
+`ContractRef` (real data, not derived). `AnalysisResponseDto` gained `contractType`/`amount`
+(real, from ai-service's own `ContractMetadata`) and `summary`/`highRiskCount`.
+**`summary` is derived, not stored** — no summary text exists anywhere in the schema beyond
+`recommendation` (already exposed separately), so it's computed at read time as
+`"Risk score X.X/10. Top risk (SEVERITY): <description>"` from the risk score and most severe
+finding already loaded on the entity. `highRiskCount` is likewise derived (count of `risks`
+with severity `HIGH`), not a stored column. `compareContracts` gained `@Transactional(readOnly
+= true)`, previously missing, needed once it started touching the lazy `risks` collection to
+populate these fields.
+
 ### ChatAgent and ConversationService
 
 `ChatAgent.execute(String userMessage, String conversationId)` calls a `ChatClient` built with
@@ -231,13 +261,20 @@ the `prompts/chat-assistant.st` system prompt, `ChatTools` as tools, and a
 
 | Method | Topic | Behaviour |
 |---|---|---|
-| `handleContractUploaded(ContractUploadedEvent)` | `contract.uploaded` | Parse then index. Logs and rethrows |
-| `handleContractIndexed(PageIndexedEvent)` | `contract.indexed` | Analyse. Logs and rethrows |
+| `handleContractUploaded(ContractUploadedEvent, byte[] correlationId)` | `contract.uploaded` | Parse then index. Logs and rethrows |
+| `handleContractIndexed(PageIndexedEvent, byte[] correlationId)` | `contract.indexed` | Analyse. Logs and rethrows |
 | `publishPageIndexed(UUID)` | `contract.indexed` | Deferred to after commit when in a transaction |
 | `publishAnalysisCompleted(UUID)` | `contract.analyzed` | Same |
 | `publishProcessingFailed(UUID)` | `contract.failed` | Called by the DLT recoverer |
 
-Listeners log with the `[KAFKA]` prefix and rethrow so the error handler can act.
+Listeners log with the `[KAFKA]` prefix and rethrow so the error handler can act. Each
+producer method attaches the contract id as a Kafka header
+(`CorrelationIds.HEADER`/`X-Contract-Id`, defined in `procuremind-common`); each listener's
+second parameter, `@Header(value = CorrelationIds.HEADER, required = false)`, restores it into
+MDC (`contractId`) for the duration of processing, falling back to the event's own id when the
+header is absent. `logging.pattern.console` in `application.yaml` includes `%X{contractId:-}`
+so this shows up automatically in every log line, across this and the other three services —
+see `ARCHITECTURE_REVIEW.md` finding #9.
 
 ---
 
@@ -246,9 +283,10 @@ Listeners log with the `[KAFKA]` prefix and rethrow so the error handler can act
 | Repository | Entity | Notable queries |
 |---|---|---|
 | `PageIndexNodeRepository` | `PageIndexNode` | `findByDocumentIdOrderByNodeOrderAsc`, `findByDocumentIdAndSummaryIsNull` (drives resumable indexing), `existsByDocumentId` (parsing idempotency) |
-| `ContractAnalysisRepository` | `ContractAnalysis` | `findByContractId`, `existsByContractId`, `countHighRiskContracts()` (`riskScore >= 6.0`, a hard-coded threshold), `getAverageRiskScore()`, a financial-exposure projection joining metadata |
+| `ContractAnalysisRepository` | `ContractAnalysis` | `findByContractId`, `existsByContractId`, `countHighRiskContracts()` (`riskScore >= 6.0`, a hard-coded threshold), `getAverageRiskScore()`, a financial-exposure projection that now also `LEFT JOIN`s `ContractRef` for `vendorName`/`fileName` (see below) |
 | `AnalysisRiskRepository` | `AnalysisRisk` | Risk frequency grouping, `getRiskSeverityDistribution()` grouped by severity |
-| `ContractMetadataRepository` | `ContractMetadata` | `getContractTypeDistribution()` |
+| `ContractMetadataRepository` | `ContractMetadata` | `getContractTypeDistribution()`, `findByContractId`, `findByContractIdIn` |
+| `ContractRefRepository` | `ContractRef` | Plain `JpaRepository`; exists **only** so `ContractAnalysisRepository` can join against it in a JPQL string. Nothing in ai-service calls `save`/`delete` on it |
 
 ---
 
@@ -260,6 +298,7 @@ Listeners log with the `[KAFKA]` prefix and rethrow so the error handler can act
 | `ContractAnalysis` | `contract_analysis` | `contractId` unique, `riskScore`, `recommendation`, `status`, `@OneToMany` to `AnalysisRisk` with cascade ALL and orphan removal |
 | `AnalysisRisk` | `analysis_risks` | `severity` and `description` only, `@ManyToOne` back to the analysis. **No category, clause link or per-risk score** |
 | `ContractMetadata` | `contract_metadata` | `contractId` unique, `contractType`, `amount` |
+| `ContractRef` | `contracts` | **Read-only.** Maps only `id`, `filename`, `vendorName` off contract-service's `contracts` table. No Flyway migration of its own (the table already exists via ai-service's historical `V1__init_schema.sql`); no ai-service code path writes through it — contract-service remains the sole writer. Exists solely so `AnalysisResponseDto`/`FinancialExposureDto` can carry vendor/file identity without a network call to contract-service. See `ARCHITECTURE_REVIEW.md` finding #11 |
 | `NodeType` | enum | `ROOT`, `ARTICLE`, `SECTION` |
 
 ---
@@ -290,6 +329,19 @@ All of `/api/analysis/**` carries a class-level
 
 ---
 
+## Testing
+
+97 tests, all green (`./mvnw -pl ai-service test`), against a real local Postgres/Kafka/MinIO
+stack. Notably: `config/OllamaHttpTimeoutTest` proves the read-timeout against a real
+`ServerSocket` that never responds, and asserts the shipped 18-minute/1-attempt values are
+what's actually configured; `Repository/ContractAnalysisRepositoryFinancialExposureTest` seeds
+a `contracts` row via raw JDBC (never through `ContractRefRepository`, keeping the read-only
+invariant even in tests) against the real database to prove the `ContractRef` join both works
+and tolerates a missing row; `service/AnalysisQueryServiceTest` covers the derived
+`summary`/`highRiskCount` fields, including the no-risks case; `service/PdfParsingServiceTest`
+covers the `FLAT_SECTION_PATTERN` fallback; both `ContractEventListenerTest` and
+`ContractEventProducerTest` cover MDC restore/clear and the correlation header.
+
 ## Known gaps
 
 - `ConversationService` returns a hard-coded `agentTrace` and an always-empty `citations` list.
@@ -297,3 +349,6 @@ All of `/api/analysis/**` carries a class-level
 - The React `RiskSidePanel` renders `risk.category` and `risk.recommendation`, which
   `AnalysisRisk` does not have.
 - Chat memory does not survive a restart.
+- **`AnalysisResponseDto.summary` is a derived, computed field, not a stored column** — see
+  the DTO note above. Revisit if a genuinely model-authored summary is wanted; that needs a
+  stored column and a prompt change, not just a DTO change.

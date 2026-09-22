@@ -87,10 +87,12 @@ auth-service's JWKS endpoint. No service trusts an `X-User-*` header; none is se
 | AI | Spring AI 1.1.0, `spring-ai-starter-model-openai` | ai-service |
 | LLM runtime | Ollama on the host, OpenAI-compatible API, default model `hermes3:8b` | ai-service |
 | Text extraction | Apache Tika | ai-service |
-| Database | PostgreSQL 15, Flyway migrations | ai-service, auth-service |
+| Upload validation | Apache Tika content-type detection (magic bytes, not the client's `Content-Type` header) | contract-service |
+| Rate limiting | Bucket4j + Caffeine, in-memory (no Redis) | auth-service |
+| Database | PostgreSQL 15, Flyway migrations | contract-service, ai-service, auth-service |
 | Messaging | Apache Kafka (KRaft, single broker) | contract-service, ai-service |
 | Object storage | MinIO, Java SDK 8.6.0 | contract-service, ai-service |
-| SPA | React 19, Vite, Tailwind, Recharts, `react-oidc-context` / `oidc-client-ts` | procuremind-react |
+| SPA | React 19, Vite, Tailwind, Recharts, `react-oidc-context` / `oidc-client-ts`, `jspdf` (CSV/PDF export) | procuremind-react |
 | Dashboard | Python 3.13, Streamlit, Pandas, Plotly, `uv` | procuremind-ui |
 | Templating | Thymeleaf (login page only) | auth-service |
 | Containers | Docker Compose | repository root |
@@ -183,10 +185,13 @@ UploadModal.handleSubmit -> ApiClient.uploadContract
   -> api-gateway SecurityConfig: POST /api/contracts/upload requires ANALYST or ADMIN
   -> contract-service ContractController.uploadContract (@PreAuthorize ANALYST/ADMIN)
   -> ContractService.processNewContract
-       -> StorageService.uploadFile  -> MinIO, object name "{uuid}_{filename}"
+       -> FileValidationService.validatePdf -> Apache Tika magic-byte check, before storage
+       -> StorageService.uploadFile  -> MinIO, object name "{uuid}_{sanitized filename}"
        -> ContractRepository.save    -> contracts row, status UPLOADED
-       -> ContractEventProducer.publishContractUploadEvent -> contract.uploaded (after commit)
-  -> 202 Accepted with ContractResponseDto
+       -> MDC.put(contractId)        -> every log line for this contract now carries its id
+       -> ContractEventProducer.publishContractUploadEvent -> contract.uploaded (after commit,
+          carrying the contract id as both the Kafka key and an X-Contract-Id header)
+  -> 202 Accepted with ContractResponseDto, or 400 with the real reason for a rejected file type
 ```
 
 ### Indexing
@@ -258,6 +263,10 @@ and also disables `MethodSecurityConfig`, so the controllers' `@PreAuthorize` ru
 too. It is a documented emergency switch, not a normal mode; a presented token is still
 validated even then.
 
+**`/login` and `/oauth2/token` are rate-limited**, per-IP (20/minute) and per-identity
+(username or OAuth2 client id, 5/minute), via an in-memory Bucket4j + Caffeine filter in
+auth-service (`RateLimitFilter`, `auth.rate-limit.*`, no Redis). See `auth-service/README.md`.
+
 Public paths: gateway `/`, `/api`, `/actuator/health*`, `/health/**`; services
 `/actuator/health*`, `/v3/api-docs/**`, `/swagger-ui*`.
 
@@ -280,11 +289,28 @@ Reliability behaviour worth knowing:
 
 - Listeners **do not** catch exceptions. They log and rethrow so `DefaultErrorHandler` can
   retry (3 attempts) and then dead-letter.
+- **Both** services' dead-letter recoverers mark the contract `FAILED` before dead-lettering,
+  not just ai-service's. contract-service's `KafkaErrorHandlingConfig` previously only
+  dead-lettered a poison message from its own listeners, leaving the contract silently stuck
+  at its prior status; its `MarkFailedThenDeadLetterRecoverer` now calls
+  `ContractStatusUpdater.markFailedByKey` first (finding #4).
 - Both producers defer the send to `afterCommit` when a transaction is active, so a rolled
   back write publishes nothing. Send failures are logged from the future's callback.
-- `ContractEventListener.shouldAdvance` in contract-service keeps status monotonic
+- Every producer also stamps the contract id onto the record as an explicit header
+  (`X-Contract-Id`, `CorrelationIds.HEADER` in `procuremind-common`), in addition to it already
+  being the record key. Every listener restores it into MDC (`contractId`) for the duration of
+  processing, falling back to the event's own id if the header is absent (older messages).
+  Both services' `logging.pattern.console` includes `%X{contractId:-}`, so one contract's
+  entire journey can now be grepped by id across all four services' logs (finding #9).
+- `ContractStatusUpdater.shouldAdvance` in contract-service (moved out of
+  `ContractEventListener`, which now only delegates) keeps status monotonic
   (`UPLOADED -> INDEXED -> ANALYZED`), with one exception: a FAILED contract can be recovered
   by a later success.
+- ai-service's Ollama call now has an explicit 18-minute client-side timeout
+  (`spring.http.client.read-timeout`) with Spring AI's own retry layer capped at 1 attempt
+  (`spring.ai.retry.max-attempts`, otherwise its default 10x exponential-backoff retry would
+  have silently multiplied that timeout) — a hung call now fails within a bounded time instead
+  of blocking the consumer thread for up to ~90 minutes (finding #2, revised).
 - There is **no transactional outbox**. A commit followed by a broker outage still loses the
   event. Documented as a known gap in `docs/architecture.md`.
 
@@ -368,9 +394,17 @@ analysis_risks
    id, analysis_id (FK), severity, description
 ```
 
-`ai-service` owns `V1__init_schema.sql` which also creates the `contracts` table that
-contract-service writes. Both services run `ddl-auto: validate`, so ai-service must migrate
-before either can start.
+`ai-service` owns `V1__init_schema.sql`, which historically also created the `contracts`
+table that contract-service writes — that file is checksum-locked and was **not** edited (an
+already-applied migration can't be changed without breaking Flyway validation everywhere it
+already ran). **contract-service now owns the `contracts` table's DDL going forward**
+(`ARCHITECTURE_REVIEW.md` finding #16): it ships its own `V1__contracts_table.sql`
+(`CREATE TABLE IF NOT EXISTS`), recorded in its own history table
+(`spring.flyway.table: flyway_schema_history_contract`), separate from ai-service's default
+`flyway_schema_history`. This wasn't optional — two independently-deployed services sharing
+one Flyway history table permanently fail `validate()` on each other's versions, which was
+confirmed live against this project's own Postgres before landing the dedicated-table fix.
+Both services run `ddl-auto: validate`.
 
 **`procuremind_auth`** (owned by auth-service): `users`, `roles`, `user_roles` (many-to-many,
 `@ManyToMany(fetch = EAGER)` on `User.roles`), plus the three Spring Authorization Server
@@ -395,8 +429,12 @@ tables from `V3__oauth2_authorization_server_schema.sql`.
 | Add or change a role | `auth-service` `V2__seed_roles.sql`, then the matchers in each `SecurityConfig` and the `@PreAuthorize` annotations |
 | Change who may call an endpoint | Gateway `SecurityConfig` for the coarse rule, the controller's `@PreAuthorize` for the service-level rule |
 | Change the Kafka flow | `ContractEventProducer` and `ContractEventListener` in both services, plus `KafkaErrorHandlingConfig` |
-| Change retry or dead-letter behaviour | `KafkaErrorHandlingConfig` in the service that consumes the topic |
+| Change retry or dead-letter behaviour | `KafkaErrorHandlingConfig` in the service that consumes the topic; contract-service's also calls `ContractStatusUpdater.markFailedByKey` before dead-lettering |
+| Change correlation-id/MDC propagation | `CorrelationIds` in `procuremind-common`, then each service's `ContractEventProducer` (header) and `ContractEventListener` (MDC restore) |
+| Change upload file-type validation | `FileValidationService` (contract-service) |
 | Change file storage | `StorageService` (write) and `PdfParsingService` (read). Both hold the bucket constant |
+| Change login/token rate limits | `auth-service` `RateLimiterService`, `RateLimitFilter`, `AuthProperties.RateLimit` |
+| Change contract/analysis CSV or PDF export | `procuremind-react/src/utils/exportUtils.js` |
 | Change the React UI | `procuremind-react/src`, entry `main.jsx` -> `App.jsx` |
 | Change the Streamlit UI | `procuremind-ui/main.py` |
 | Change user administration | `auth-service` `UserAdminController` / `UserAdminService`, React `components/admin/UserManagement.jsx` |
@@ -408,8 +446,15 @@ tables from `V3__oauth2_authorization_server_schema.sql`.
 These are properties of the current implementation, recorded so nobody rediscovers them.
 
 - **No transactional outbox.** A database commit followed by a broker failure loses the event.
-- **Cross-service schema ownership.** ai-service's migration creates the `contracts` table that
-  contract-service owns and writes.
+- **MinIO-orphan-on-failed-DB-save.** `ContractService.processNewContract` uploads to MinIO
+  before saving the `Contract` row; if the save then fails, the uploaded object is orphaned
+  with no compensating delete (`StorageService` exposes no delete method). Confirmed and
+  locked in by a test (`ContractServiceTest.aFailedDbSaveOrphansTheAlreadyUploadedMinioObject`)
+  rather than fixed — deliberately scoped as "verify, don't remediate" in this pass.
+- **`AnalysisResponseDto.summary` is a derived, computed field, not a stored column.** No
+  summary text exists anywhere in the schema beyond `recommendation` (exposed separately), so
+  it's computed at read time from the risk score and most severe finding. A genuinely
+  model-authored summary would need a stored column and a prompt change.
 - **Chat memory is per-process.** `ChatAgent` uses an in-memory 20-message window, so chat
   history is lost on restart and is not shared across instances.
 - **`api-gateway` is outside the Maven reactor** and must be built separately.
@@ -417,3 +462,11 @@ These are properties of the current implementation, recorded so nobody rediscove
   inside each screening batch is not.
 - **`procuremind-react/src/api/mockData.js`** exists but its role in the running application is
   not clearly established from the current implementation.
+
+Resolved since the last pass over this document: cross-service schema ownership of the
+`contracts` table (contract-service now has its own Flyway migration and history table, see
+section 12); no login rate limiting; no upload file-type validation; no correlation-id
+propagation; the unbounded Ollama call; the flat-numbered section-heading mis-parse; missing
+test coverage on contract-service's write path; the frontend/backend DTO field mismatch; no
+export/reporting. Full detail on each, with file references and test evidence, is in
+`ARCHITECTURE_REVIEW.md`'s Implementation Log.
