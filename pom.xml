@@ -15,6 +15,7 @@
         <module>procuremind-common</module>
         <module>contract-service</module>
         <module>ai-service</module>
+        <module>auth-service</module>
     </modules>
 
 </project>

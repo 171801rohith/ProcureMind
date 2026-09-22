@@ -19,7 +19,9 @@ public class DashboardDtos {
             String contractType,
             Double amount,
             Double riskScore,
-            Long highRiskCount
+            Long highRiskCount,
+            String vendorName,
+            String fileName
     ) {
     }
 

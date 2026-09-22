@@ -1,9 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { ApiClient } from '../api/client';
+import { useAuth } from 'react-oidc-context';
+import { ApiClient, setAccessToken, setOnAuthExpired } from '../api/client';
+import { AUTH_REQUIRED } from '../auth/authConfig';
 
 const AppContext = createContext();
 
 export function AppProvider({ children }) {
+  const auth = useAuth();
+
   const [activeTab, setActiveTab] = useState('dashboard');
   const [contracts, setContracts] = useState([]);
   const [metrics, setMetrics] = useState({ totalAnalyzed: 0, highRiskCount: 0, averageRiskScore: 0 });
@@ -12,7 +16,7 @@ export function AppProvider({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
-  
+
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
@@ -25,6 +29,25 @@ export function AppProvider({ children }) {
       agentTrace: ['Initialized ProcureMind Agentic Assistant session', 'Bound session UUID']
     }
   ]);
+
+  // Keep the API client's bearer token in sync with the OIDC user, and give it a
+  // "token expired" handler that tries one silent renew before forcing a redirect.
+  useEffect(() => {
+    setAccessToken(auth.user?.access_token);
+    setOnAuthExpired(async () => {
+      try {
+        const user = await auth.signinSilent();
+        if (user?.access_token) {
+          setAccessToken(user.access_token);
+          return true;
+        }
+      } catch {
+        // fall through to a full redirect
+      }
+      auth.signinRedirect();
+      return false;
+    });
+  }, [auth, auth.user?.access_token]);
 
   const loadData = async (showRefresh = false) => {
     if (showRefresh) setIsRefreshing(true);
@@ -52,8 +75,10 @@ export function AppProvider({ children }) {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (!AUTH_REQUIRED || auth.isAuthenticated) {
+      loadData();
+    }
+  }, [auth.isAuthenticated]);
 
   return (
     <AppContext.Provider

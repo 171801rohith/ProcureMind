@@ -1,6 +1,13 @@
 server:
   port: 8082
 
+# Puts the contract id (restored into MDC by ContractEventListener on every message it picks
+# up) into every log line, so one contract's journey through this service can be grepped by
+# id instead of manually correlating timestamps across log statements.
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%X{contractId:-}] %-40.40logger{39} : %m%n%wEx"
+
 spring:
   application:
     name: ai-service
@@ -11,6 +18,12 @@ spring:
     username: user
     password: password
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 6
+      minimum-idle: 2
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1200000
 
   jpa:
     hibernate:
@@ -39,6 +52,23 @@ spring:
     enabled: true
     baseline-on-migrate: true
     locations: classpath:db/migration
+    # contract-service now owns the `contracts` table's DDL going forward, in its own
+    # separate flyway_schema_history_contract table (see contract-service's application.yaml
+    # for why a shared history table doesn't work across two independently-deployed
+    # services). This service's historical V1 is kept unchanged, purely for checksum
+    # compatibility with databases that already applied it.
+
+  # OAuth2 Resource Server. The JWKS URL differs by how the service is run, so the value
+  # lives in AUTH_JWK_SET_URI and the default here is the host/IDE one:
+  #   - docker compose sets AUTH_JWK_SET_URI=http://auth-service:8083/oauth2/jwks (service DNS)
+  #   - a plain `mvn spring-boot:run` or an IDE run uses this localhost default
+  # The issuer is deliberately NOT derived from this URL: app.security.issuer-uri stays the
+  # static browser-facing issuer in both modes, so the `iss` claim is validated identically.
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${AUTH_JWK_SET_URI:http://localhost:8083/oauth2/jwks}
 
   ai:
     openai:
@@ -48,6 +78,26 @@ spring:
         options:
           model: ${AI_MODEL}
           temperature: 0.0
+    retry:
+      # Spring AI retries a timed-out call (ResourceAccessException) itself, by default up
+      # to 10 attempts with exponential backoff up to 3m between tries. Left at that default,
+      # a single hung call would cost up to ~10 x 18m plus backoff before Spring AI gives up
+      # — multiplying the read-timeout below into a multi-hour stall instead of bounding it.
+      # Kafka's own retry/backoff (3 delivery attempts) is already the intended retry layer
+      # for a hung LLM call, so this is capped to a single attempt: one read-timeout, one
+      # failure, handed straight to the Kafka consumer's error handler.
+      max-attempts: 1
+
+  # Spring AI's OpenAiApi (the Ollama-compatible client used for every screening/analysis
+  # call) is built with the auto-configured RestClient.Builder bean, which Boot wires from
+  # these properties. Without an explicit read-timeout, a hung Ollama call blocks the Kafka
+  # consumer thread indefinitely — bounded here at 18 minutes so a single call still fails
+  # within max.poll.interval.ms (30m above) and flows into the existing retry/DLT path,
+  # instead of stalling the whole pipeline for up to ~90 minutes (3 delivery attempts x 30m).
+  http:
+    client:
+      connect-timeout: 10s
+      read-timeout: 18m
 
 springdoc:
   api-docs:
@@ -62,7 +112,39 @@ management:
         include: health, info
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
+
+# Resource-server enforcement toggle. See docs/AUTH_IMPLEMENTATION_PLAN.md sections 9 & 13.
+app:
+  # Bounds the LLM indexing loop that runs on the Kafka consumer thread.
+  # Invariant: max-duration x (1 + Kafka retries) must stay below the consumer's
+  # max.poll.interval.ms (30m above), or the broker evicts us mid-contract.
+  indexing:
+    max-duration: ${INDEXING_MAX_DURATION:8m}
+    inter-call-delay: ${INDEXING_INTER_CALL_DELAY:0ms}
+    # Upper bound on the text summarised for one node. A document whose headings do not match
+    # the parser patterns collapses into a single node holding everything, which overflows the
+    # model context and yields a useless summary.
+    max-node-chars: ${INDEXING_MAX_NODE_CHARS:12000}
+  analysis:
+    # Section index shown to the screening model per batch. Batch count is
+    # ceil(total index characters / this), so it sets how many model calls a contract costs.
+    screening-batch-chars: ${ANALYSIS_SCREENING_BATCH_CHARS:4000}
+    # Ceiling on the evidence text handed to the tool-free analysis call.
+    max-evidence-chars: ${ANALYSIS_MAX_EVIDENCE_CHARS:16000}
+    # How many flagged sections are read in full, and how much of each.
+    max-verified-sections: ${ANALYSIS_MAX_VERIFIED_SECTIONS:8}
+    max-verified-section-chars: ${ANALYSIS_MAX_VERIFIED_SECTION_CHARS:4000}
+    # Wall-clock ceiling for screening. This times the Kafka retry count must stay under the
+    # consumer's max.poll.interval.ms (30m above). Raise it for very large documents.
+    max-duration: ${ANALYSIS_MAX_DURATION:8m}
+  retrieval:
+    # Upper bound on a single tool response handed to the analysis model. Exceeding the model
+    # context window makes the completion come back empty, which is how analysis was failing.
+    max-tool-response-chars: ${RETRIEVAL_MAX_TOOL_RESPONSE_CHARS:12000}
+  security:
+    enforce: ${AUTH_ENABLED:true}
+    issuer-uri: ${AUTH_ISSUER_URI:http://localhost:8083}
 
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

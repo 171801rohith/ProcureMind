@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAuth } from 'react-oidc-context';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
@@ -10,9 +11,15 @@ import { IntelligenceScreen } from './components/intelligence/IntelligenceScreen
 import { VendorPortfolio } from './components/vendors/VendorPortfolio';
 import { ChatInterface } from './components/chat/ChatInterface';
 import { UploadModal } from './components/upload/UploadModal';
+import { UserManagement } from './components/admin/UserManagement';
+import { Unauthorized } from './components/admin/Unauthorized';
+import { LoginScreen } from './auth/LoginScreen';
+import { AUTH_REQUIRED } from './auth/authConfig';
+import { useRoles } from './auth/roles';
 
 function MainContent() {
   const { activeTab, error } = useApp();
+  const { isAdmin } = useRoles();
 
   return (
     <main className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -43,12 +50,16 @@ function MainContent() {
 
       {activeTab === 'chat' && <ChatInterface />}
 
+      {/* Reaching this tab without the ADMIN role shows a 403-style screen rather than the
+          dashboard. The API refuses the same caller regardless of what is rendered here. */}
+      {activeTab === 'admin' && (isAdmin ? <UserManagement /> : <Unauthorized requiredRole="ADMIN" />)}
+
       <UploadModal />
     </main>
   );
 }
 
-export default function App() {
+function AppShell() {
   return (
     <AppProvider>
       <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
@@ -60,4 +71,27 @@ export default function App() {
       </div>
     </AppProvider>
   );
+}
+
+function AuthLoading() {
+  return (
+    <div className="flex h-screen items-center justify-center bg-slate-950 text-slate-400 font-sans text-sm">
+      Authenticating…
+    </div>
+  );
+}
+
+export default function App() {
+  const auth = useAuth();
+
+  if (AUTH_REQUIRED) {
+    if (auth.isLoading || auth.activeNavigator) {
+      return <AuthLoading />;
+    }
+    if (!auth.isAuthenticated) {
+      return <LoginScreen />;
+    }
+  }
+
+  return <AppShell />;
 }

@@ -7,6 +7,7 @@ import com.procuremind.ai_service.dto.TocNodeDto;
 import com.procuremind.ai_service.service.AnalysisQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/analysis")
 @RequiredArgsConstructor
+@PreAuthorize("hasAnyRole('VIEWER','ANALYST','ADMIN')")
 public class AnalysisController {
     private final AnalysisQueryService queryService;
 

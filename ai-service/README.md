@@ -1,358 +1,354 @@
-# ProcureMind — AI Service (`ai-service`)
+# ai-service
 
-The **AI Service** is the intelligence engine of the **ProcureMind** microservices ecosystem. Operating on port `8082`, it leverages **Spring Boot 4.0.7**, **Spring AI 1.1.0**, **Apache Tika 3.2.2**, **MinIO**, **PostgreSQL**, and cloud LLM inference via **Google Gemini API (Gemini 2.5 Flash)** to transform unstructured contract PDFs into hierarchical index trees, structured metadata, multi-factor risk assessments, and interactive conversational intelligence.
+## Purpose
+
+The document intelligence bounded context. It turns a stored PDF into a hierarchical clause
+index, writes an AI summary for every section, produces a risk analysis for the whole
+contract, and serves the read models the dashboards use.
+
+It never receives file uploads over HTTP. Work arrives over Kafka.
+
+## Responsibilities
+
+- Extract text from the stored PDF and build a `page_index_nodes` tree
+- Summarise every node with the LLM
+- Screen every section for risk and produce a `ContractAnalysisResultDto`
+- Persist `contract_analysis`, `analysis_risks` and `contract_metadata`
+- Publish `contract.indexed`, `contract.analyzed` and `contract.failed`
+- Serve analysis, table of contents, clause and dashboard read models
+- Host the conversational assistant
+
+## Technology
+
+Java 21, **Spring Boot 3.5.14** (the only module not on Boot 4), Spring AI 1.1.0 with
+`spring-ai-starter-model-openai`, Apache Tika, Spring Data JPA, Spring Kafka, Spring Security
+OAuth2 Resource Server, MinIO SDK, PostgreSQL, Flyway, Lombok.
+
+The LLM is a local **Ollama** server reached through its OpenAI-compatible API. Configuration
+comes from `AI_BASE_URL`, `AI_API_KEY` and `AI_MODEL`, none of which have defaults, so the
+service will not start without them.
+
+**The Ollama call is bounded.** `spring.http.client.connect-timeout` (10s) and `read-timeout`
+(18m) in `application.yaml` configure Boot's auto-configured `RestClient.Builder` bean, which
+is exactly what Spring AI's `OpenAiChatAutoConfiguration` consumes for `OpenAiApi` — so a hung
+call now fails within 18 minutes instead of blocking the Kafka consumer thread indefinitely
+(previously unbounded, and capable of stalling the pipeline for up to ~90 minutes across 3
+Kafka delivery attempts). A second property is required alongside it and easy to miss:
+`spring.ai.retry.max-attempts: 1`. Spring AI's own retry layer retries exactly the exception a
+read-timeout throws (`ResourceAccessException`), by default up to 10 times with exponential
+backoff — left at that default, it would have silently multiplied the 18-minute bound by up to
+10x. Capping it at 1 leaves Kafka's own 3-attempt/backoff envelope as the only retry layer, as
+originally intended. See `ARCHITECTURE_REVIEW.md` finding #2 and
+`src/test/java/.../config/OllamaHttpTimeoutTest.java`.
+
+## Entry point
+
+`src/main/java/com/procuremind/ai_service/AiServiceApplication.java`, a plain
+`@SpringBootApplication`. Port 8082. On start, Flyway applies `db/migration/V1__init_schema.sql`,
+`V2__page_index_node_indexes.sql` and `V3__index_parent_node_and_analysis_fk.sql` to
+`procuremind_db`, recorded in the default `flyway_schema_history` table. **V1 historically also
+created the `contracts` table** that contract-service writes; that file is checksum-locked and
+was left unchanged. contract-service now owns that table's DDL going forward, in its own
+separate `flyway_schema_history_contract` table — see `contract-service/README.md` and
+`ARCHITECTURE_REVIEW.md` finding #16. Because the two services no longer share a history table,
+there is **no migration-ordering dependency between them** either way.
+
+## Package structure
+
+```
+com/procuremind/ai_service/
+├── agent/          LLM-facing classes, one per job
+│   └── tools/      @Tool methods exposed to the chat model
+├── service/        pipeline stages and read models
+│   └── kafka/      producer and listeners
+├── Repository/     Spring Data interfaces (note the capital R)
+├── controller/     REST read surface and chat
+├── entity/         JPA entities
+├── dto/            API and LLM payload shapes
+├── config/         MinIO client, Kafka error handling
+└── security/       resource-server configuration
+```
+
+`Repository` is capitalised, unlike contract-service's `repository`. That is existing
+inconsistency, not a convention.
+
+| Package | Belongs here | Does not belong here |
+|---|---|---|
+| `agent` | Prompt construction, `ChatClient` calls, output parsing | Persistence, Kafka |
+| `agent/tools` | `@Tool` methods, thin delegation to `RetrievalService` | Business rules |
+| `service` | Pipeline orchestration, transactions, queries | HTTP concerns |
+| `service/kafka` | Event publishing and consumption | Analysis logic |
+| `controller` | Read endpoints and chat | Any write to the pipeline |
 
 ---
 
-## 1. Purpose & Architectural Role
+## The pipeline
 
-`ai-service` encapsulates all artificial intelligence, natural language document processing, agentic tool execution, and analytical query handling. It does not handle raw HTTP file uploads; instead, it is triggered asynchronously via Apache Kafka events, streaming documents directly from MinIO object storage.
-
-```mermaid
-flowchart TB
-    subgraph Event Trigger Layer
-        KAFKA["Apache Kafka Broker\n[Port 9092]"]
-    end
-
-    subgraph Service Ingestion & Parsing
-        LISTEN["ContractEventListener"]
-        PARSER["PdfParsingService\n(Apache Tika 3.2.2)"]
-        MINIO[("MinIO Bucket:\nprocuremind-contracts")]
-    end
-
-    subgraph AI Agents & Indexing
-        IDX_SVC["IndexingService"]
-        IDX_AGENT["IndexingAgent\n(Spring AI ChatClient)"]
-        GEMINI["Google Gemini API\ngemini-2.5-flash [Cloud LLM]"]
-    end
-
-    subgraph Risk Analysis Engine
-        ANA_SVC["AnalysisService"]
-        ANA_AGENT["AnalysisAgent\n(Spring AI Agent)"]
-        TOOLS["ContractAnalysisTools\n(Function Calling)"]
-        RETRIEVAL["RetrievalService"]
-    end
-
-    subgraph Conversational Assistant
-        CHAT_CTRL["ChatController\n(/api/analysis/chat)"]
-        CONV_SVC["ConversationService"]
-        CHAT_AGENT["ChatAgent\n(20-Message Memory Window)"]
-        CHAT_TOOLS["ChatTools\n(4 Grounding Tools)"]
-    end
-
-    subgraph Persistence Layer
-        DB[("PostgreSQL Database\nprocuremind_db [Port 5433]")]
-    end
-
-    KAFKA -->|1. Consume contract.uploaded| LISTEN
-    LISTEN -->|2. Stream PDF| PARSER
-    PARSER -->|GetObject| MINIO
-    PARSER -->|3. Save Document Hierarchy| DB
-
-    LISTEN -->|4. Trigger Node Indexing| IDX_SVC
-    IDX_SVC -->|5. Summarize Section Nodes| IDX_AGENT
-    IDX_AGENT -->|6. Prompt LLM| GEMINI
-    IDX_SVC -->|7. Persist Titles & Summaries| DB
-    IDX_SVC -->|8. Publish contract.indexed| KAFKA
-
-    KAFKA -->|9. Consume contract.indexed| LISTEN
-    LISTEN -->|10. Execute Analysis| ANA_SVC
-    ANA_SVC -->|11. Run Agent| ANA_AGENT
-    ANA_AGENT -->|12. Function Calls| TOOLS
-    TOOLS -->|13. Retrieve TOC / Text| RETRIEVAL
-    RETRIEVAL -->|Query Nodes| DB
-    ANA_AGENT -->|14. Synthesize Risk JSON| GEMINI
-    ANA_SVC -->|15. Save Analysis & Risks| DB
-    ANA_SVC -->|16. Publish contract.analyzed| KAFKA
-
-    CHAT_CTRL --> CONV_SVC
-    CONV_SVC --> CHAT_AGENT
-    CHAT_AGENT <--> CHAT_TOOLS
-    CHAT_TOOLS --> RETRIEVAL
-    CHAT_AGENT <--> GEMINI
+```
+contract.uploaded
+   │
+   ├─ PdfParsingService.parseAndIndexPdf   MinIO → Tika → page_index_nodes tree
+   └─ IndexingService.indexContractNodes   IndexingAgent.summarize per node
+                                           → contract.indexed
+contract.indexed
+   └─ AnalysisService.processContract
+        └─ AnalysisAgent.execute
+             stage 1  SectionBatches + SectionScreener   (every section, no tools)
+             stage 2  raw text of the most severe findings, straight from the repository
+             stage 3  one tool-free LLM call → ContractAnalysisResultDto
+        → contract_analysis + analysis_risks + contract_metadata
+        → contract.analyzed
 ```
 
 ---
 
-## 2. Structure
+## Classes
 
-```
-ai-service/
-├── pom.xml                                   # Maven build configuration & Spring AI dependencies
-├── README.md                                 # Module documentation
-└── src/
-    ├── main/
-    │   ├── java/com/procuremind/ai_service/
-    │   │   ├── AiServiceApplication.java      # Spring Boot application entry point
-    │   │   ├── agent/
-    │   │   │   ├── AnalysisAgent.java         # Tool-calling risk assessment agent
-    │   │   │   ├── ChatAgent.java             # Conversational agent with ChatMemory
-    │   │   │   ├── IndexingAgent.java         # Document section indexing agent
-    │   │   │   └── tools/
-    │   │   │       ├── ChatTools.java         # Function calling tools for chat assistant
-    │   │   │       └── ContractAnalysisTools.java # Function calling tools for risk agent
-    │   │   ├── config/
-    │   │   │   └── MinioConfig.java           # MinIO client configuration bean
-    │   │   ├── controller/
-    │   │   │   ├── AnalysisController.java    # CQRS analytics, TOC, metrics & comparison endpoints
-    │   │   │   └── ChatController.java        # Conversational assistant REST endpoint
-    │   │   ├── dto/
-    │   │   │   ├── AnalysisResponseDto.java   # External risk analysis representation
-    │   │   │   ├── ChatDtos.java              # Chat request, response, citation & search criteria
-    │   │   │   ├── ClauseContentDto.java      # Clause text and title representation
-    │   │   │   ├── ContractAnalysisResultDto.java # LLM structured JSON response schema
-    │   │   │   ├── DashboardDtos.java         # KPI metrics, exposure, & distribution records
-    │   │   │   ├── NodeSummary.java           # Section title and summary record
-    │   │   │   └── TocNodeDto.java            # Table of Contents tree node
-    │   │   ├── entity/
-    │   │   │   ├── AnalysisRisk.java          # JPA entity for flagged clause risks
-    │   │   │   ├── ContractAnalysis.java      # JPA entity for overall contract risk score
-    │   │   │   ├── ContractMetadata.java      # JPA entity for contract type and amount
-    │   │   │   ├── NodeType.java              # Enum: ROOT, ARTICLE, SECTION
-    │   │   │   └── PageIndexNode.java         # JPA entity for document tree node
-    │   │   ├── Repository/
-    │   │   │   ├── AnalysisRiskRepository.java
-    │   │   │   ├── ContractAnalysisRepository.java
-    │   │   │   ├── ContractMetadataRepository.java
-    │   │   │   └── PageIndexNodeRepository.java
-    │   │   └── service/
-    │   │       ├── AnalysisQueryService.java  # Read-only CQRS query aggregator
-    │   │       ├── AnalysisService.java       # Analysis orchestration & persistence
-    │   │       ├── ConversationService.java   # Chat orchestrator and response wrapper
-    │   │       ├── IndexingService.java       # Node summarization batch orchestrator
-    │   │       ├── PdfParsingService.java     # Apache Tika PDF extraction & regex parsing
-    │   │       ├── RetrievalService.java      # Data access layer for agent tools
-    │   │       └── kafka/
-    │   │           ├── ContractEventListener.java # Kafka message listener
-    │   │           └── ContractEventProducer.java # Kafka event publisher
-    │   └── resources/
-    │       ├── application.yaml               # Service configuration & LLM options
-    │       ├── db/migration/
-    │       │   └── V1__init_schema.sql        # Flyway initial schema definition
-    │       └── prompts/
-    │           ├── chat-assistant.st          # Prompt template for conversational agent
-    │           └── contract-analysis.st       # Prompt template for risk analysis agent
-    └── test/
-        └── java/com/procuremind/ai_service/
-            └── AiServiceApplicationTests.java
-```
+### PdfParsingService
 
----
+**Location:** `service/PdfParsingService.java`
+**Used by:** `ContractEventListener.handleContractUploaded`
+**Depends on:** `MinioClient`, `PageIndexNodeRepository`, Apache Tika
 
-## 3. How It Works
+| Method | Purpose | Important behaviour |
+|---|---|---|
+| `parseAndIndexPdf(UUID documentId, String minioObjName)` | Build the section tree | `@Transactional`. Idempotency guard: returns immediately if `existsByDocumentId`. Streams the object from bucket `procuremind-contracts`, extracts with `tika.parseToString` (`maxStringLength(-1)`), then walks the text line by line. Wraps any failure in `RuntimeException("PDF Parsing failed")` |
 
-### Execution Flow: Input ➔ Processing ➔ Output
+Structure detection is pure regex over lines shorter than 150 characters:
 
-```
-1. [Input]: Kafka event "contract.uploaded" received with contractId and MinIO object key.
-2. [Parsing]: PdfParsingService streams the PDF from MinIO, extracts raw text via Apache Tika, and splits content into a hierarchical tree (ROOT, ARTICLE, SECTION) using regex pattern matching.
-3. [Indexing]: IndexingService iterates over unindexed nodes; IndexingAgent calls Ollama (Qwen2.5 7B) to generate concise titles and summaries, then publishes "contract.indexed".
-4. [Analysis]: AnalysisService triggers AnalysisAgent which uses Spring AI Function Calling (ContractAnalysisTools) to inspect the Table of Contents, reads specific high-risk clauses, and synthesizes a risk score (1-10) and identified risks, then publishes "contract.analyzed".
-5. [Conversation]: When users interact with the chat assistant, ChatController routes the request through ConversationService and ChatAgent, utilizing ChatTools to query pre-computed analyses and raw clauses.
-6. [Output]: REST API endpoints serve CQRS read models to the UI.
-```
+| Pattern | Produces |
+|---|---|
+| `ARTICLE_PATTERN` `^ARTICLE\s+([IVXLCDM]+|\d+)...` | `ARTICLE` node at level 2, parented to ROOT |
+| `SECTION_PATTERN` `^(\d+(?:\.\d+)+)...` | `SECTION` node at level `dots + 1`, parented to the nearest node one level up |
+| `FLAT_SECTION_PATTERN` `^(\d+)...` | Fallback, tried only when `SECTION_PATTERN` fails: a flat, single-level heading like `"1. Definitions"` (no dotted sub-level) is still indexed as its own `SECTION` node instead of silently falling into the previous node's body text. Fixed per `ARCHITECTURE_REVIEW.md` finding #20 |
+| `NOISE_PATTERN` page numbers | Dropped |
 
----
+Everything that is not a heading is buffered into the current node's `rawContext`. A ROOT node
+is always created first with title `"Document Root"`.
 
-## 4. Key Classes & Components
+**Consequence worth knowing:** a document whose headings match neither pattern collapses into a
+single ROOT node holding the entire text. That is a real case in this repository, not a
+hypothetical.
 
-### 1. `PdfParsingService` (`service/PdfParsingService.java`)
-- Streams PDF documents directly from the MinIO `procuremind-contracts` bucket.
-- Uses `org.apache.tika.Tika` with unlimited string length to extract character streams.
-- Identifies structure using regex patterns:
-  - `ARTICLE_PATTERN`: Matches `ARTICLE I`, `ARTICLE 1 - Term`, etc.
-  - `SECTION_PATTERN`: Matches numbered sections (`1.1`, `2.3.1`).
-  - `NOISE_PATTERN`: Filters out standalone page numbers (`page 1 of 12`).
-- Builds a connected tree of `PageIndexNode` entities with hierarchy levels (`ROOT` = Level 1, `ARTICLE` = Level 2, `SECTION` = Level 3+).
+### IndexingService
 
-### 2. `IndexingAgent` (`agent/IndexingAgent.java`)
-- Prompts Ollama with the system prompt:
-  > *"You are an expert legal document indexing assistant. Extract title (3-5 words) and summary (1-2 sentences)..."*
-- Uses Spring AI `ChatClient.entity(NodeSummary.class)` to bind the LLM response into an immutable Java record.
+**Location:** `service/IndexingService.java`
 
-### 3. `AnalysisAgent` (`agent/AnalysisAgent.java`)
-- Uses Spring AI Function Calling with `ContractAnalysisTools` to perform multi-step grounded analysis.
-- Prompt: `src/main/resources/prompts/contract-analysis.st`.
-- Converts the final LLM response into `ContractAnalysisResultDto` via `BeanOutputConverter`.
+| Method | Purpose | Important behaviour |
+|---|---|---|
+| `indexContractNodes(UUID documentId)` | Summarise every unsummarised node | Deliberately **not** `@Transactional`: a single transaction across dozens of LLM calls would hold a connection for minutes and lose all progress on failure. Each node is saved individually, so a retry resumes from `findByDocumentIdAndSummaryIsNull` |
 
-### 4. `ContractAnalysisTools` (`agent/tools/ContractAnalysisTools.java`)
-- `@Tool getContractSummary(documentId)`: Fetches Table of Contents (Node IDs, titles, summaries) to locate relevant clauses.
-- `@Tool getClauseContent(nodeId)`: Fetches exact raw text for a specific clause node.
+Bounds and failure rules:
 
-### 5. `ChatAgent` (`agent/ChatAgent.java`) & `ChatTools` (`agent/tools/ChatTools.java`)
-- Memory-backed conversational agent using `MessageWindowChatMemory` (retains last 20 messages per session).
-- Prompt: `src/main/resources/prompts/chat-assistant.st`.
-- Equipped with four tools:
-  - `discoverContracts`: Discovers contracts matching metadata criteria.
-  - `getCachedAnalysis`: Returns pre-computed risk score and identified risks instantly.
-  - `getContractSummary`: Retrieves the semantic Table of Contents.
-  - `getClauseContent`: Fetches exact legal text for deep evidence retrieval.
+- Wall-clock budget `app.indexing.max-duration` (default 8m). Exceeding it throws
+  `IndexingIncompleteException`, which is retryable and resumes.
+- `app.indexing.max-node-chars` (default 12000) caps the text sent for one node.
+- A single failing node is logged and skipped. If **every** node fails, it throws rather than
+  publishing an empty index.
+- Publishes `contract.indexed` on success, and also when there was nothing left to do.
 
-### 6. `RetrievalService` (`service/RetrievalService.java`)
-- Backing service that implements the database lookups and formatting for all agent tools.
+Progress logs use the `[INDEXING]` and `[SUMMARIZING]` prefixes.
 
-### 7. `AnalysisQueryService` (`service/AnalysisQueryService.java`)
-- Read-only CQRS query service computing dashboard KPI metrics, risk distributions, financial exposure scatter points, contract type distributions, and contract comparisons.
+### AnalysisAgent
 
----
+**Location:** `agent/AnalysisAgent.java`
+**Used by:** `AnalysisService`
+**Depends on:** `ChatClient.Builder`, `PageIndexNodeRepository`, `SectionScreener`,
+`BeanOutputConverter<ContractAnalysisResultDto>`
 
-## 5. Dependencies & Integrations
+| Method | Purpose | Important behaviour |
+|---|---|---|
+| `execute(UUID contractId)` | Produce the analysis | Three stages, described below. Throws `InvalidAnalysisOutputException` or `AnalysisIncompleteException` |
+| `requireJsonObject(UUID, String)` | Enforce the output contract | Normalises a markdown-fenced object; rejects anything that is not a JSON object before parsing is attempted |
 
-- **Internal**:
-  - `com.procuremind:procuremind-common`: Shared event DTOs (`ContractUploadedEvent`, `PageIndexedEvent`).
-- **External Frameworks**:
-  - **Spring Boot 4.0.7**: Core application framework.
-  - **Spring AI 1.1.0**: ChatClient, function calling annotations (`@Tool`), and output converters.
-  - **Apache Tika 3.2.2**: Text extraction engine for PDF binaries.
-  - **Spring Data JPA & Hibernate**: Relational persistence.
-  - **Flyway**: Database schema migration.
-  - **MinIO Java SDK 8.5.17**: Object storage client.
-  - **Spring Kafka**: Event messaging.
-  - **Ollama**: Local LLM inference server running `qwen2.5:7b`.
+Stage 1 screens **every** section. `SectionBatches.byCharacterBudget` splits the index by
+`app.analysis.screening-batch-chars` (default 4000), so the number of model calls is
+`ceil(index size / budget) + 1`, known before the first call. A batch whose reply cannot be
+read keeps its summaries as evidence, so an unreadable reply costs detail but never coverage.
+Exceeding `app.analysis.max-duration` throws rather than scoring a partially read document.
 
----
+Stage 2 reads raw text for the highest-severity findings, capped by
+`max-verified-sections` (8) and `max-verified-section-chars` (4000), within
+`max-evidence-chars` (16000). No model call.
 
-## 6. Database Schema (`procuremind_db`)
+Stage 3 is a single call on a `ChatClient` built **with no tools at all**. That is structural:
+Spring AI 1.1.0 recurses in `OpenAiChatModel.internalCall` for as long as the model emits tool
+calls and offers no iteration limit, so a tool-free call cannot loop. It also removes the
+failure where the model continued the retrieved clause text instead of answering.
 
-The schema is initialized via Flyway script `src/main/resources/db/migration/V1__init_schema.sql`:
+A parsed result with a null `riskScore` is rejected.
 
-```sql
--- Hierarchical Document Sections
-CREATE TABLE page_index_nodes (
-    id             UUID NOT NULL PRIMARY KEY,
-    document_id    UUID,
-    parent_node_id UUID,
-    level          INTEGER,
-    node_order     INTEGER,
-    node_type      VARCHAR(255),
-    title          TEXT,
-    summary        TEXT,
-    raw_context    TEXT
-);
+### SectionScreener
 
--- Contract Analysis Results
-CREATE TABLE contract_analysis (
-    id             UUID NOT NULL PRIMARY KEY,
-    contract_id    UUID NOT NULL UNIQUE,
-    risk_score     DOUBLE PRECISION,
-    recommendation VARCHAR(255),
-    status         VARCHAR(255),
-    created_at     TIMESTAMP WITHOUT TIME ZONE
-);
+**Location:** `agent/SectionScreener.java`
 
--- Contract Extracted Metadata
-CREATE TABLE contract_metadata (
-    id            UUID NOT NULL PRIMARY KEY,
-    contract_id   UUID NOT NULL UNIQUE,
-    contract_type VARCHAR(255),
-    amount        DOUBLE PRECISION
-);
+| Method | Purpose | Important behaviour |
+|---|---|---|
+| `screen(UUID, List<PageIndexNode>, int number, int total)` | Judge one batch | Returns `Optional.empty()` when the reply could not be read, which the caller treats differently from "no risk found" |
 
--- Individual Clause Risks
-CREATE TABLE analysis_risks (
-    id          UUID NOT NULL PRIMARY KEY,
-    analysis_id UUID REFERENCES contract_analysis(id),
-    severity    VARCHAR(255),
-    description TEXT
-);
-```
+It asks for **lines**, not JSON: `<id> | <HIGH|MEDIUM|LOW> | <sentence>`. The local 8B model
+would not reliably produce a JSON list for this pass. Lines are extracted with a regex even
+when the model wraps them in prose, findings naming ids outside the batch are dropped, and an
+explicit `NONE` is a valid "nothing risky here" answer.
+
+### AnalysisService
+
+**Location:** `service/AnalysisService.java`
+
+| Method | Purpose | Important behaviour |
+|---|---|---|
+| `processContract(UUID contractId)` | Orchestrate analysis and persistence | `@Transactional`. Idempotency guard on `existsByContractId`; when analysis already exists it **re-publishes** `contract.analyzed` rather than returning silently, so a contract stuck at FAILED can still converge. Saves metadata and analysis, with `AnalysisRisk` cascaded from `ContractAnalysis` |
+
+### RetrievalService
+
+**Location:** `service/RetrievalService.java`
+**Used by:** `ChatTools` (the chat assistant)
+
+| Method | Purpose | Important behaviour |
+|---|---|---|
+| `getContractSummary(String documentId)` | Table of contents: id, title, summary per node | Validates the id and returns guidance instead of throwing; explicit message when the document has no nodes; bounded by `app.retrieval.max-tool-response-chars` (12000), truncating on a line boundary so a partial node id is never offered |
+| `getClauseContent(String nodeId)` | Raw text of one node | Same id validation; explicit message when the section has no text or is not found; bounded the same way |
+| `getCachedAnalysis(String contractId)` | Stored risk score, recommendation and risks as text | Id-validated |
+| `discoverContracts(SearchCriteria)` | Metadata search across contracts | Null-safe on contract type and risk score; a contract with no analysis is listed as "not analysed yet" |
+
+Invalid ids return a corrective sentence rather than throwing. Throwing turned into a tool
+error that the model answered by repeating the same call.
+
+### AnalysisQueryService
+
+**Location:** `service/AnalysisQueryService.java`. The CQRS read side behind
+`AnalysisController`.
+
+| Method | Serves |
+|---|---|
+| `getAnalysis(UUID)` | `GET /api/analysis/{contractId}` |
+| `getRisks(UUID)` | `GET /api/analysis/{contractId}/risks` |
+| `getTableOfContent(UUID)` | `GET /api/analysis/{contractId}/toc` |
+| `getClauseContent(UUID)` | `GET /api/analysis/node/{nodeId}` |
+| `getDashboardMetrics()` | `GET /api/analysis/dashboard-metrics` |
+| `getTopRiskyClauses()` | `GET /api/analysis/risks/top` |
+| `getFinancialExposure()` | `GET /api/analysis/financial-exposure` |
+| `getRiskDistribution()` | `GET /api/analysis/risks/distribution` |
+| `getContractTypeDistribution()` | `GET /api/analysis/contracts/type-distribution` |
+| `compareContracts(List<UUID>)` | `GET /api/analysis/compare` |
+
+**DTO fields added for the frontend (`ARCHITECTURE_REVIEW.md` finding #11).**
+`FinancialExposureDto` gained `vendorName`/`fileName`, a genuine same-database join via
+`ContractRef` (real data, not derived). `AnalysisResponseDto` gained `contractType`/`amount`
+(real, from ai-service's own `ContractMetadata`) and `summary`/`highRiskCount`.
+**`summary` is derived, not stored** — no summary text exists anywhere in the schema beyond
+`recommendation` (already exposed separately), so it's computed at read time as
+`"Risk score X.X/10. Top risk (SEVERITY): <description>"` from the risk score and most severe
+finding already loaded on the entity. `highRiskCount` is likewise derived (count of `risks`
+with severity `HIGH`), not a stored column. `compareContracts` gained `@Transactional(readOnly
+= true)`, previously missing, needed once it started touching the lazy `risks` collection to
+populate these fields.
+
+### ChatAgent and ConversationService
+
+`ChatAgent.execute(String userMessage, String conversationId)` calls a `ChatClient` built with
+the `prompts/chat-assistant.st` system prompt, `ChatTools` as tools, and a
+`MessageWindowChatMemory` of 20 messages keyed by `conversationId`.
+
+**The memory is in-process.** History is lost on restart and is not shared across instances.
+
+`ConversationService.handleChat` wraps it for the controller.
+
+### ContractEventListener and ContractEventProducer
+
+**Location:** `service/kafka/`
+**Group:** `ai-processing-group`
+
+| Method | Topic | Behaviour |
+|---|---|---|
+| `handleContractUploaded(ContractUploadedEvent, byte[] correlationId)` | `contract.uploaded` | Parse then index. Logs and rethrows |
+| `handleContractIndexed(PageIndexedEvent, byte[] correlationId)` | `contract.indexed` | Analyse. Logs and rethrows |
+| `publishPageIndexed(UUID)` | `contract.indexed` | Deferred to after commit when in a transaction |
+| `publishAnalysisCompleted(UUID)` | `contract.analyzed` | Same |
+| `publishProcessingFailed(UUID)` | `contract.failed` | Called by the DLT recoverer |
+
+Listeners log with the `[KAFKA]` prefix and rethrow so the error handler can act. Each
+producer method attaches the contract id as a Kafka header
+(`CorrelationIds.HEADER`/`X-Contract-Id`, defined in `procuremind-common`); each listener's
+second parameter, `@Header(value = CorrelationIds.HEADER, required = false)`, restores it into
+MDC (`contractId`) for the duration of processing, falling back to the event's own id when the
+header is absent. `logging.pattern.console` in `application.yaml` includes `%X{contractId:-}`
+so this shows up automatically in every log line, across this and the other three services —
+see `ARCHITECTURE_REVIEW.md` finding #9.
 
 ---
 
-## 7. REST API Specification
+## Repositories
 
-Base Path: `/api/analysis` (Routed through API Gateway at port `8080` or direct at port `8082`).
-
-| HTTP Method | Endpoint | Description | Query / Body Parameters |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/analysis/chat` | Interactive agentic chat query | `ChatRequestDto` (`userMessage`, `conversationId`) |
-| `GET` | `/api/analysis/{contractId}` | Fetch risk score, recommendation, and metadata | Path variable `contractId` (UUID) |
-| `GET` | `/api/analysis/{contractId}/risks` | Fetch identified clause risks for a contract | Path variable `contractId` (UUID) |
-| `GET` | `/api/analysis/{contractId}/toc` | Retrieve Table of Contents tree nodes | Path variable `contractId` (UUID) |
-| `GET` | `/api/analysis/node/{nodeId}` | Retrieve raw clause text and title | Path variable `nodeId` (UUID) |
-| `GET` | `/api/analysis/dashboard-metrics` | Retrieve global KPIs (total, high risk, avg score) | None |
-| `GET` | `/api/analysis/risks/top` | Retrieve top 5 most frequent risky clauses | None |
-| `GET` | `/api/analysis/financial-exposure` | Retrieve financial exposure vs risk points | None |
-| `GET` | `/api/analysis/risks/distribution` | Retrieve risk severity count distribution | None |
-| `GET` | `/api/analysis/contracts/type-distribution` | Retrieve contract type distribution | None |
-| `GET` | `/api/analysis/compare` | Compare risk scores across contracts | `?ids=uuid1,uuid2` |
+| Repository | Entity | Notable queries |
+|---|---|---|
+| `PageIndexNodeRepository` | `PageIndexNode` | `findByDocumentIdOrderByNodeOrderAsc`, `findByDocumentIdAndSummaryIsNull` (drives resumable indexing), `existsByDocumentId` (parsing idempotency) |
+| `ContractAnalysisRepository` | `ContractAnalysis` | `findByContractId`, `existsByContractId`, `countHighRiskContracts()` (`riskScore >= 6.0`, a hard-coded threshold), `getAverageRiskScore()`, a financial-exposure projection that now also `LEFT JOIN`s `ContractRef` for `vendorName`/`fileName` (see below) |
+| `AnalysisRiskRepository` | `AnalysisRisk` | Risk frequency grouping, `getRiskSeverityDistribution()` grouped by severity |
+| `ContractMetadataRepository` | `ContractMetadata` | `getContractTypeDistribution()`, `findByContractId`, `findByContractIdIn` |
+| `ContractRefRepository` | `ContractRef` | Plain `JpaRepository`; exists **only** so `ContractAnalysisRepository` can join against it in a JPQL string. Nothing in ai-service calls `save`/`delete` on it |
 
 ---
 
-## 8. Kafka Events
+## Entities
 
-| Event Topic | Direction | Payload Class | Trigger / Description |
-| :--- | :--- | :--- | :--- |
-| `contract.uploaded` | Consumed | `ContractUploadedEvent` | Triggers PDF download, Tika parsing, and IndexingAgent execution. |
-| `contract.indexed` | Produced | `PageIndexedEvent` (`status="INDEXED"`) | Published after all section nodes are summarized. |
-| `contract.indexed` | Consumed | `PageIndexedEvent` | Triggers AnalysisAgent to execute risk assessment. |
-| `contract.analyzed` | Produced | `PageIndexedEvent` (`status="ANALYSIS_COMPLETED"`) | Published when risk assessment and metadata persistence finish. |
-
----
-
-## 9. Configuration (`application.yaml`)
-
-```yaml
-server:
-  port: 8082
-
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5433/procuremind_db
-    username: user
-    password: password
-  jpa:
-    hibernate:
-      ddl-auto: validate
-  kafka:
-    bootstrap-servers: localhost:9092
-    consumer:
-      group-id: ai-processing-group
-    properties:
-      spring.json.trusted.packages: "com.procuremind.*"
-  ai:
-    ollama:
-      base-url: http://localhost:11434
-      chat:
-        options:
-          model: qwen2.5:7b
-          temperature: 0.0
-          num-ctx: 8192
-```
+| Entity | Table | Notes |
+|---|---|---|
+| `PageIndexNode` | `page_index_nodes` | `documentId`, `parentNodeId`, `level`, `nodeOrder`, `nodeType`, `title`, `summary`, `rawContext`. The hierarchy is expressed by `parentNodeId`, not a JPA relationship |
+| `ContractAnalysis` | `contract_analysis` | `contractId` unique, `riskScore`, `recommendation`, `status`, `@OneToMany` to `AnalysisRisk` with cascade ALL and orphan removal |
+| `AnalysisRisk` | `analysis_risks` | `severity` and `description` only, `@ManyToOne` back to the analysis. **No category, clause link or per-risk score** |
+| `ContractMetadata` | `contract_metadata` | `contractId` unique, `contractType`, `amount` |
+| `ContractRef` | `contracts` | **Read-only.** Maps only `id`, `filename`, `vendorName` off contract-service's `contracts` table. No Flyway migration of its own (the table already exists via ai-service's historical `V1__init_schema.sql`); no ai-service code path writes through it — contract-service remains the sole writer. Exists solely so `AnalysisResponseDto`/`FinancialExposureDto` can carry vendor/file identity without a network call to contract-service. See `ARCHITECTURE_REVIEW.md` finding #11 |
+| `NodeType` | enum | `ROOT`, `ARTICLE`, `SECTION` |
 
 ---
 
-## 10. How to Run
+## Configuration
 
-### Prerequisites
-1. Ensure Ollama is running and model is downloaded:
-   ```bash
-   docker exec -it procuremind-ollama ollama pull qwen2.5:7b
-   ```
-2. Ensure infrastructure containers (PostgreSQL, MinIO, Kafka) are active.
-3. Install `procuremind-common` library:
-   ```bash
-   cd ../procuremind-common
-   ./mvnw clean install -DskipTests
-   cd ../ai-service
-   ```
+| Class or file | What it enables |
+|---|---|
+| `config/MinioConfig` | `MinioClient` bean |
+| `config/KafkaErrorHandlingConfig` | `DefaultErrorHandler` with `FixedBackOff(5s, 2)` (3 attempts); recoverer dead-letters to `<topic>.DLT` **and** publishes `contract.failed` so the contract is visibly failed. Declares `contract.failed` and the two DLT topics |
+| `security/SecurityConfig` | Two chains under `app.security.enforce`; `/actuator/**` is ADMIN only |
+| `security/MethodSecurityConfig` | `@EnableMethodSecurity` behind the same property |
+| `security/JwtDecoderConfig` | JWKS decoder plus issuer validation |
+| `prompts/contract-analysis.st` | System prompt for stage 3. States that evidence must never be echoed back |
+| `prompts/chat-assistant.st` | System prompt for `ChatAgent` |
 
-### Running Locally
-```bash
-./mvnw spring-boot:run
-```
-
-### OpenAPI / Swagger UI
-Navigate to `http://localhost:8082/swagger-ui.html` when running.
+Consumer tuning in `application.yaml`: `max.poll.interval.ms: 1800000` (30 minutes) and
+`max.poll.records: 1`, because the pipeline runs LLM calls on the consumer thread. The
+indexing and analysis time budgets are sized so three attempts stay inside that window.
 
 ---
 
-## 11. Troubleshooting
+## Endpoints
 
-1. **`AnalysisAgent` empty response / JSON parsing error**:
-   - Verify that Ollama is accessible at `http://localhost:11434` and `qwen2.5:7b` is pulled.
-   - Verify that MinIO has the PDF file and `page_index_nodes` were generated during the indexing phase.
-2. **Kafka Deserialization errors**:
-   - Ensure `spring.json.trusted.packages` is set to `"com.procuremind.*"` in `application.yaml`.
-3. **Database connection failure**:
-   - If running locally outside Docker, ensure PostgreSQL port is mapped to `5433` (as configured in `docker-compose.yaml`).
+All of `/api/analysis/**` carries a class-level
+`@PreAuthorize("hasAnyRole('VIEWER','ANALYST','ADMIN')")`. `POST /api/analysis/chat` on
+`ChatController` additionally requires `hasAnyRole('ANALYST','ADMIN')`.
+
+---
+
+## Testing
+
+97 tests, all green (`./mvnw -pl ai-service test`), against a real local Postgres/Kafka/MinIO
+stack. Notably: `config/OllamaHttpTimeoutTest` proves the read-timeout against a real
+`ServerSocket` that never responds, and asserts the shipped 18-minute/1-attempt values are
+what's actually configured; `Repository/ContractAnalysisRepositoryFinancialExposureTest` seeds
+a `contracts` row via raw JDBC (never through `ContractRefRepository`, keeping the read-only
+invariant even in tests) against the real database to prove the `ContractRef` join both works
+and tolerates a missing row; `service/AnalysisQueryServiceTest` covers the derived
+`summary`/`highRiskCount` fields, including the no-risks case; `service/PdfParsingServiceTest`
+covers the `FLAT_SECTION_PATTERN` fallback; both `ContractEventListenerTest` and
+`ContractEventProducerTest` cover MDC restore/clear and the correlation header.
+
+## Known gaps
+
+- `ConversationService` returns a hard-coded `agentTrace` and an always-empty `citations` list.
+- `ClauseContentDto` and `EnrichedClauseDto`-style DTOs are not all consumed by the frontends.
+- The React `RiskSidePanel` renders `risk.category` and `risk.recommendation`, which
+  `AnalysisRisk` does not have.
+- Chat memory does not survive a restart.
+- **`AnalysisResponseDto.summary` is a derived, computed field, not a stored column** — see
+  the DTO note above. Revisit if a genuinely model-authored summary is wanted; that needs a
+  stored column and a prompt change, not just a DTO change.

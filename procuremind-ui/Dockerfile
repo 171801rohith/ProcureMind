@@ -10,13 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
+    "authlib>=1.3.0" \
     "pandas>=3.0.5" \
     "plotly>=6.9.0" \
     "python-dotenv>=1.2.2" \
     "requests>=2.34.2" \
     "streamlit>=1.60.0"
 
-COPY main.py .
+COPY main.py auth.py ./
 
 EXPOSE 8501
 

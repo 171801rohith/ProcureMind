@@ -29,18 +29,22 @@ public class AnalysisService {
 
     @Transactional
     public void processContract(UUID contractId) {
-        log.info("Starting orchestrated analysis for contract: {}", contractId);
+        log.info("[ANALYSIS] Contract {}: starting analysis", contractId);
 
         if (analysisRepository.existsByContractId(contractId)) {
-            log.info("Contract {} already analyzed. Skipping.", contractId);
+            // Re-announce rather than return silently. The expensive part is skipped, but a
+            // contract whose analysis succeeded after an earlier failure would otherwise stay
+            // at FAILED forever: the status only moves when this event is published, and the
+            // listener that consumes it ignores repeats.
+            log.info("[ANALYSIS] Contract {}: already analysed, re-publishing completion", contractId);
+            eventProducer.publishAnalysisCompleted(contractId);
             return;
         }
 
+        // The agent screens every section of the contract and then reads the most severe
+        // ones in full; the [SCREENING] lines show the coverage it achieved.
+        log.info("[ANALYSIS] Contract {}: screening all sections", contractId);
         ContractAnalysisResultDto aiResponse = analysisAgent.execute(contractId);
-
-        log.info("==========================================================");
-        log.info("AI Response : {}", aiResponse);
-        log.info("==========================================================");
 
         ContractAnalysis analysis = ContractAnalysis.builder()
                 .contractId(contractId)
@@ -69,8 +73,11 @@ public class AnalysisService {
                 analysis.setRisks(risks);
         analysisRepository.save(analysis);
 
+        log.info("[ANALYSIS] Contract {}: analysis persisted successfully (riskScore={}, risks={}, type={})",
+                contractId, aiResponse.riskScore(), risks.size(), aiResponse.contractType());
+
         eventProducer.publishAnalysisCompleted(contractId);
-        log.info("Analysis saved and event published for contract: {}", contractId);
+        log.info("[ANALYSIS] Contract {}: completed", contractId);
     }
 
 }

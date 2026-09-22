@@ -1,11 +1,13 @@
 package com.procuremind.contract_service.controller;
 
 import com.procuremind.contract_service.dto.ContractResponseDto;
+import com.procuremind.contract_service.exception.UnsupportedFileTypeException;
 import com.procuremind.contract_service.service.ContractService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -17,9 +19,11 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/contracts")
 @RequiredArgsConstructor
+@PreAuthorize("hasAnyRole('VIEWER','ANALYST','ADMIN')")
 public class ContractController {
     private final ContractService contractService;
 
+    @PreAuthorize("hasAnyRole('ANALYST','ADMIN')")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> uploadContract(
             @RequestPart("file") MultipartFile file,
@@ -28,6 +32,8 @@ public class ContractController {
         try {
             ContractResponseDto response = contractService.processNewContract(file, vendorName);
             return ResponseEntity.accepted().body(response);
+        } catch (UnsupportedFileTypeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body("Try again later.");
         }

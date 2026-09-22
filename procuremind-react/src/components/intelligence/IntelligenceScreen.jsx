@@ -5,6 +5,9 @@ import { TOCNav } from './TOCNav';
 import { LegalReadingPane } from './LegalReadingPane';
 import { RiskSidePanel } from './RiskSidePanel';
 import { Card } from '../ui/Card';
+import { Button } from '../ui/Button';
+import { FileDown } from 'lucide-react';
+import { exportContractAnalysisToPdf } from '../../utils/exportUtils';
 
 export function IntelligenceScreen() {
   const { contracts } = useApp();
@@ -71,6 +74,7 @@ export function IntelligenceScreen() {
   }
 
   const selectedTocNode = tocNodes.find((n) => n.id === selectedNodeId);
+  const selectedContract = contracts.find((c) => c.id === selectedContractId);
 
   return (
     <div className="space-y-4 min-h-[calc(100vh-7rem)] flex flex-col">
@@ -79,17 +83,31 @@ export function IntelligenceScreen() {
         <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
           Target Agreement:
         </label>
-        <select
-          value={selectedContractId}
-          onChange={(e) => setSelectedContractId(e.target.value)}
-          className="w-full sm:w-auto bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-blue-500 max-w-full sm:max-w-md truncate"
-        >
-          {contracts.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.vendorName} - {c.fileName} (Risk: {c.riskScore} / 10)
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <select
+            value={selectedContractId}
+            onChange={(e) => setSelectedContractId(e.target.value)}
+            className="flex-1 sm:flex-none bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-blue-500 max-w-full sm:max-w-md truncate"
+          >
+            {contracts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.vendorName} - {c.fileName} (Risk: {c.riskScore} / 10)
+              </option>
+            ))}
+          </select>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => exportContractAnalysisToPdf(selectedContract, risks)}
+            disabled={!selectedContract}
+            title={!selectedContract ? 'Select an agreement first' : 'Download this agreement\'s analysis as a PDF report'}
+            className="gap-1.5 whitespace-nowrap shrink-0"
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Export PDF</span>
+          </Button>
+        </div>
       </div>
 
       {/* 3-Column Responsive Grid */}

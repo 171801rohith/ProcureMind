@@ -44,6 +44,21 @@ public class PdfParsingService {
             "^(\\d+(?:\\.\\d+)+)\\.?\\s*[-–—:]?\\s*(.*)$"
     );
 
+    /**
+     * Fallback for flat, single-level numbering such as {@code "1. Definitions"}.
+     *
+     * <p>{@link #SECTION_PATTERN} requires at least one dotted sub-level (e.g. {@code "1.1"})
+     * and never matches a bare {@code "1."}, so a contract that numbers its top-level clauses
+     * without sub-sections fell through to body text on every heading. This is tried only
+     * after {@link #SECTION_PATTERN} fails, so nested numbering keeps matching the richer
+     * pattern first; the {@link #startsLikeTitle} guard still applies, so an ordinary sentence
+     * that happens to start with a number (e.g. "3 dollars per unit...") is not mistaken for
+     * a heading.
+     */
+    private static final Pattern FLAT_SECTION_PATTERN = Pattern.compile(
+            "^(\\d+)\\.?\\s*[-–—:]?\\s*(.*)$"
+    );
+
     private static final Pattern NOISE_PATTERN = Pattern.compile(
             "^(page\\s+\\d+(\\s+of\\s+\\d+)?|\\d+)$",
             Pattern.CASE_INSENSITIVE
@@ -121,7 +136,16 @@ public class PdfParsingService {
                         continue;
                     }
                     Matcher sectionMatcher = SECTION_PATTERN.matcher(text);
-                    if (sectionMatcher.matches() && startsLikeTitle(sectionMatcher.group(2))) {
+                    boolean dotted = sectionMatcher.matches() && startsLikeTitle(sectionMatcher.group(2));
+                    if (!dotted) {
+                        Matcher flatMatcher = FLAT_SECTION_PATTERN.matcher(text);
+                        if (flatMatcher.matches() && startsLikeTitle(flatMatcher.group(2))) {
+                            sectionMatcher = flatMatcher;
+                        } else {
+                            sectionMatcher = null;
+                        }
+                    }
+                    if (sectionMatcher != null) {
                         currentNode = finalizeNode(currentNode, bodyBuffer);
 
                         String numbering = sectionMatcher.group(1);

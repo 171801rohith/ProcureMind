@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Sign in · ProcureMind</title>
+    <link rel="stylesheet" th:href="@{/css/auth.css}" href="/css/auth.css">
+</head>
+<body>
+<main class="auth-shell">
+    <section class="auth-brand" aria-hidden="true">
+        <div class="auth-brand__inner">
+            <div class="auth-mark">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+            </div>
+            <h2 class="auth-brand__title">ProcureMind</h2>
+            <p class="auth-brand__tagline">Procurement Document Risk Intelligence</p>
+            <ul class="auth-brand__points">
+                <li>Hierarchical clause indexing across every agreement</li>
+                <li>Automated risk scoring and financial exposure</li>
+                <li>Role-based access for analysts and administrators</li>
+            </ul>
+        </div>
+    </section>
+
+    <section class="auth-panel">
+        <div class="auth-card">
+            <div class="auth-card__mark">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+            </div>
+
+            <h1 class="auth-card__title">Sign in</h1>
+            <p class="auth-card__subtitle">Use your ProcureMind ID to continue.</p>
+
+            <div class="auth-alert auth-alert--error" role="alert" th:if="${errorMessage}">
+                <span th:text="${errorMessage}">Incorrect username or password.</span>
+            </div>
+            <div class="auth-alert auth-alert--info" role="status" th:if="${logoutMessage}">
+                <span th:text="${logoutMessage}">You have been signed out.</span>
+            </div>
+
+            <form class="auth-form" method="post" th:action="@{/login}" action="/login">
+                <div class="auth-field">
+                    <label for="username">Username</label>
+                    <input id="username" name="username" type="text" autocomplete="username"
+                           required autofocus spellcheck="false" autocapitalize="none">
+                </div>
+
+                <div class="auth-field">
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password"
+                           autocomplete="current-password" required>
+                </div>
+
+                <button class="auth-submit" type="submit">Sign in</button>
+            </form>
+
+            <p class="auth-footnote">
+                Protected by OAuth2 and OpenID Connect. Accounts are issued by your ProcureMind
+                administrator.
+            </p>
+        </div>
+
+        <p class="auth-copyright">ProcureMind · Enterprise Procurement Intelligence</p>
+    </section>
+</main>
+</body>
+</html>
